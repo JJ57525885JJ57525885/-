@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>简易代码编辑器</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <!-- 顶部工具栏 -->
+    <div class="toolbar" id="toolbar" style="display: none;">
+        <div class="toolbar-row">
+            <button class="btn-toggle-tree" id="btnToggleTree" onclick="toggleFileTree()" title="收起/展开文件树">☰</button>
+            <button class="btn-run" id="btnRun" onclick="runCode()">▶ 运行</button>
+            <button class="btn-stop" id="btnStop" onclick="stopPreview()">✕ 关闭</button>
+            <button class="btn-pack" id="btnPack" onclick="packProject()">📦 打包</button>
+            <button class="btn-exit" id="btnExit" onclick="exitProject()">退出</button>
+            <div class="row-right">
+                <button class="btn-icon" id="btnUndo" onclick="undo()" title="撤销 (Ctrl+Z)" disabled>↶</button>
+                <button class="btn-icon" id="btnRedo" onclick="redo()" title="重做 (Ctrl+Y)" disabled>↷</button>
+            </div>
+        </div>
+        <div class="toolbar-row search-row">
+            <input type="text" id="searchInput" placeholder="搜索（区分大小写）"
+                   onkeydown="if(event.key==='Enter'){event.preventDefault();doSearch();}"
+                   oninput="onSearchInput()">
+            <button class="btn-search" onclick="doSearch()" title="搜索下一个 (回车)">🔍</button>
+            <div class="search-status" id="searchStatus"></div>
+        </div>
+    </div>
+
+    <!-- 主体 -->
+    <div class="main">
+        <div class="sidebar collapsed" id="sidebar">
+            <div class="sidebar-header">文件</div>
+            <div class="file-tree-actions">
+                <button onclick="newFile()">+文件</button>
+                <button onclick="newFolder()">+文件夹</button>
+                <button onclick="document.getElementById('fileInput').click()">上传文件</button>
+            </div>
+            <div class="file-tree" id="fileTree"></div>
+        </div>
+
+        <div class="editor-area" id="editorArea" style="display: none;">
+            <div class="editor-header">
+                <span>当前文件：</span>
+                <span class="filename" id="currentFileName">未选择</span>
+            </div>
+            <div class="editor" id="editor">
+                <div class="gutter" id="gutter"></div>
+                <div class="code-wrap">
+                    <pre class="highlight-layer" id="highlightLayer"></pre>
+                    <textarea id="codeEditor" wrap="off" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off" placeholder="选择或新建一个文件，然后在这里编写代码..." disabled></textarea>
+                </div>
+                <div class="image-viewer" id="imageViewer">
+                    <img id="imageViewerImg" src="" alt="">
+                    <div class="image-meta" id="imageViewerMeta"></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="project-list-view" id="projectListView">
+            <h1>📁 我的项目</h1>
+            <p class="subtitle">点击项目进入编辑器，或点击右下角 + 创建新项目</p>
+            <div class="project-cards" id="projectCards"></div>
+            <div class="empty-state" id="emptyState" style="display: none;">
+                <div class="icon">📂</div>
+                <p>还没有项目</p>
+                <p style="font-size: 12px; margin-top: 8px;">点击右下角 + 创建你的第一个项目</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- 全屏预览 -->
+    <div class="preview-area" id="previewArea">
+        <div class="preview-area-header">
+            <span>▶ 预览</span>
+            <button class="close-preview" onclick="stopPreview()" title="关闭预览 (Esc)">✕</button>
+        </div>
+        <div class="preview-area-body">
+            <iframe id="previewFrameFull" sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups"></iframe>
+        </div>
+    </div>
+
+    <button class="fab" id="fab" onclick="showNewProjectModal()" title="新建项目">+</button>
+
+    <div class="modal-overlay" id="projectModal" style="display: none;">
+        <div class="modal">
+            <h3>新建项目</h3>
+            <input type="text" id="projectName" placeholder="输入项目名称" autofocus>
+            <div class="modal-actions">
+                <button class="btn-cancel" onclick="hideNewProjectModal()">取消</button>
+                <button class="btn-confirm" onclick="confirmNewProject()">创建</button>
+            </div>
+        </div>
+    </div>
+
+    <button class="warn-btn" id="warnBtn" title="拖动移动 · 点击查看运行日志">
+        ⚠︎
+        <span class="warn-badge" id="warnBadge"></span>
+    </button>
+
+    <div class="warn-panel" id="warnPanel">
+        <div class="warn-panel-header">
+            <span class="warn-title">运行日志<span class="warn-count" id="warnCount"></span></span>
+            <button onclick="clearWarnLog()">清空</button>
+            <button onclick="hideWarnPanel()" title="关闭">✕</button>
+        </div>
+        <div class="warn-list" id="warnList"></div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <input type="file" id="fileInput" accept="*/*" multiple style="display:none" onchange="uploadFile(this)">
+
+    <script src="highlight.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
