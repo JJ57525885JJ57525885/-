@@ -86,6 +86,33 @@ body {
 .theme-menu-item.active { background: #0e639c; color: #fff; }
 .theme-menu-item + .theme-menu-item { border-top: 1px solid #333; }
 
+/* ★ 下载应用按钮（仅主界面显示） */
+.download-btn {
+    position: fixed;
+    top: 18px;
+    right: 16px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 8px 14px;
+    background: #0e639c;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    font-family: inherit;
+    text-decoration: none;
+    cursor: pointer;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, .3);
+    transition: background .15s, transform .1s;
+    -webkit-tap-highlight-color: transparent;
+    z-index: 150;
+    white-space: nowrap;
+}
+.download-btn:hover { background: #1177bb; color: #fff; }
+.download-btn:active { transform: scale(.96); }
+
 /* ===== 顶部工具栏 ===== */
 .toolbar {
     background: #2d2d2d;
@@ -757,6 +784,8 @@ body.light-theme .save-indicator { color: #0e639c; }
 
     .toolbar .zip-menu { min-width: 0; }
     .toolbar .zip-menu-item { padding: 5px 8px; font-size: 11px; }
+
+    .download-btn { padding: 6px 10px; font-size: 12px; top: 16px; }
 }
 
 /* ================= ★ 浅色主题 ================= */
@@ -781,6 +810,14 @@ body.light-theme .theme-menu-item { color: #555; }
 body.light-theme .theme-menu-item:hover { background: #f0f0f0; color: #333; }
 body.light-theme .theme-menu-item.active { background: #0e639c; color: #fff; }
 body.light-theme .theme-menu-item + .theme-menu-item { border-top-color: #eee; }
+
+/* 下载按钮 */
+body.light-theme .download-btn {
+    background: #0e639c;
+    color: #fff;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, .12);
+}
+body.light-theme .download-btn:hover { background: #1177bb; }
 
 /* 工具栏 */
 body.light-theme .toolbar {
