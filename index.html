@@ -4,16 +4,29 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>简易代码编辑器</title>
-    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="styles.css?v=4">
 </head>
 <body>
+    <!-- ★ 设置按钮与主题菜单 -->
+    <button class="theme-btn" id="themeBtn" onclick="toggleThemeMenu(event)" title="设置">⚙</button>
+    <div class="theme-menu" id="themeMenu" style="display: none;">
+        <button class="theme-menu-item" data-theme="dark" onclick="setTheme('dark', event)"><span class="theme-icon">🌙</span>深色</button>
+        <button class="theme-menu-item" data-theme="light" onclick="setTheme('light', event)">🔆浅色</button>
+    </div>
+
     <!-- 顶部工具栏 -->
     <div class="toolbar" id="toolbar" style="display: none;">
         <div class="toolbar-row">
             <button class="btn-toggle-tree" id="btnToggleTree" onclick="toggleFileTree()" title="收起/展开文件树">☰</button>
             <button class="btn-run" id="btnRun" onclick="runCode()">▶ 运行</button>
             <button class="btn-stop" id="btnStop" onclick="stopPreview()">✕ 关闭</button>
-            <button class="btn-pack" id="btnPack" onclick="packProject()">📦 打包</button>
+            <div class="zip-wrapper" id="zipWrapper">
+                <button class="btn-pack" id="btnPack" onclick="toggleZipMenu(event)">🗂️ZIP</button>
+                <div class="zip-menu" id="zipMenu" style="display: none;">
+                    <button class="zip-menu-item" onclick="onZipMenuPack(event)">📤打包ZIP</button>
+                    <button class="zip-menu-item" onclick="onZipMenuUpload(event)">📥上传ZIP</button>
+                </div>
+            </div>
             <button class="btn-exit" id="btnExit" onclick="exitProject()">退出</button>
             <div class="row-right">
                 <button class="btn-icon" id="btnUndo" onclick="undo()" title="撤销 (Ctrl+Z)" disabled>↶</button>
@@ -45,6 +58,8 @@
             <div class="editor-header">
                 <span>当前文件：</span>
                 <span class="filename" id="currentFileName">未选择</span>
+                <!-- ★ 保存指示灯 -->
+                <span class="save-indicator" id="saveIndicator">●</span>
             </div>
             <div class="editor" id="editor">
                 <div class="gutter" id="gutter"></div>
@@ -52,9 +67,21 @@
                     <pre class="highlight-layer" id="highlightLayer"></pre>
                     <textarea id="codeEditor" wrap="off" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off" placeholder="选择或新建一个文件，然后在这里编写代码..." disabled></textarea>
                 </div>
+
+                <!-- 图片查看器 -->
                 <div class="image-viewer" id="imageViewer">
                     <img id="imageViewerImg" src="" alt="">
                     <div class="image-meta" id="imageViewerMeta"></div>
+                </div>
+
+                <!-- 音频查看器 -->
+                <div class="audio-viewer" id="audioViewer">
+                    <div class="audio-viewer-inner">
+                        <div class="audio-icon">🎵</div>
+                        <div class="audio-name" id="audioViewerName"></div>
+                        <audio id="audioViewerPlayer" controls preload="metadata"></audio>
+                        <div class="audio-meta" id="audioViewerMeta"></div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -112,6 +139,7 @@
     <div class="toast" id="toast"></div>
 
     <input type="file" id="fileInput" accept="*/*" multiple style="display:none" onchange="uploadFile(this)">
+    <input type="file" id="zipInput" accept=".zip,application/zip" style="display:none" onchange="importZip(this)">
 
     <script src="highlight.js"></script>
     <script src="app.js"></script>
