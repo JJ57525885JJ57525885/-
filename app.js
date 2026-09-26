@@ -480,7 +480,6 @@ async function loadProjects() {
         console.warn('IndexedDB 读取失败：', e);
     }
 
-    /* 从 beforeunload 兜底备份恢复 */
     if (!data) {
         try {
             const raw = localStorage.getItem(BACKUP_KEY);
@@ -493,7 +492,6 @@ async function loadProjects() {
         }
     }
 
-    /* 兼容旧 localStorage 数据并迁移 */
     if (!data) {
         try {
             const raw = localStorage.getItem(STORAGE_KEY);
@@ -510,7 +508,6 @@ async function loadProjects() {
         }
     }
 
-    /* ★ 清洗旧数据里可能残留的 _undoStack / _redoStack */
     if (data) {
         data.forEach(function (proj) {
             (function cleanTree(nodes) {
@@ -958,6 +955,12 @@ function deleteProject(id) {
         isTreeCollapsed = true;
         document.getElementById('sidebar').classList.add('collapsed');
         document.getElementById('fileTree').innerHTML = '';
+
+        /* ★ 恢复下载和设置按钮 */
+        const themeBtn = document.getElementById('themeBtn');
+        if (themeBtn) themeBtn.style.display = 'flex';
+        const dlBtn = document.getElementById('downloadBtn');
+        if (dlBtn) dlBtn.style.display = 'inline-flex';
     }
 
     projects = projects.filter(p => p.id !== id);
@@ -1012,8 +1015,11 @@ function enterProject(projectId) {
     document.getElementById('btnStop').style.display = 'none';
     document.getElementById('zipWrapper').style.display = 'inline-block';
 
+    /* ★ 进入项目隐藏设置按钮和下载按钮 */
     const themeBtn = document.getElementById('themeBtn');
     if (themeBtn) themeBtn.style.display = 'none';
+    const dlBtn = document.getElementById('downloadBtn');
+    if (dlBtn) dlBtn.style.display = 'none';
     closeThemeMenu();
 
     document.getElementById('searchInput').value = '';
@@ -1046,8 +1052,11 @@ function backToProjectList() {
     document.getElementById('sidebar').classList.add('collapsed');
     document.getElementById('fileTree').innerHTML = '';
 
+    /* ★ 回到主界面显示设置按钮和下载按钮 */
     const themeBtn = document.getElementById('themeBtn');
     if (themeBtn) themeBtn.style.display = 'flex';
+    const dlBtn = document.getElementById('downloadBtn');
+    if (dlBtn) dlBtn.style.display = 'inline-flex';
 
     renderProjectList();
 }
