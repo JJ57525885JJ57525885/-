@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>简易代码编辑器</title>
-    <link rel="stylesheet" href="styles.css?v=4">
+    <link rel="stylesheet" href="styles.css?v=5">
 </head>
 <body>
     <!-- ★ 设置按钮与主题菜单 -->
@@ -13,6 +13,9 @@
         <button class="theme-menu-item" data-theme="dark" onclick="setTheme('dark', event)"><span class="theme-icon">🌙</span>深色</button>
         <button class="theme-menu-item" data-theme="light" onclick="setTheme('light', event)">🔆浅色</button>
     </div>
+
+    <!-- ★ 下载应用按钮（仅主界面显示） -->
+    <a class="download-btn" id="downloadBtn" href="代码编辑1.0.apk" download="代码编辑1.0.apk" title="下载安卓应用">⬇ 下载应用</a>
 
     <!-- 顶部工具栏 -->
     <div class="toolbar" id="toolbar" style="display: none;">
@@ -58,7 +61,6 @@
             <div class="editor-header">
                 <span>当前文件：</span>
                 <span class="filename" id="currentFileName">未选择</span>
-                <!-- ★ 保存指示灯 -->
                 <span class="save-indicator" id="saveIndicator">●</span>
             </div>
             <div class="editor" id="editor">
@@ -87,7 +89,7 @@
         </div>
 
         <div class="project-list-view" id="projectListView">
-            <h1>📁 我的项目</h1>
+            <h1>Ats编辑器</h1>
             <p class="subtitle">点击项目进入编辑器，或点击右下角 + 创建新项目</p>
             <div class="project-cards" id="projectCards"></div>
             <div class="empty-state" id="emptyState" style="display: none;">
