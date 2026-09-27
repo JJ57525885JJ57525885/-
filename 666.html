@@ -1,0 +1,995 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>OBJ 模型编辑器 · 选中任意部位删除 + 整体方向调整</title>
+<style>
+  *{box-sizing:border-box;}
+  html,body{margin:0;height:100%;overflow:hidden;background:#0f1216;color:#dfe5ee;
+    font-family:system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;}
+  #app{display:flex;flex-direction:column;height:100vh;}
+
+  /* ---------- 顶栏 ---------- */
+  header{height:54px;flex:0 0 54px;display:flex;align-items:center;gap:8px;
+    padding:0 14px;background:#171b22;border-bottom:1px solid #262c36;}
+  .logo{font-weight:700;font-size:15px;letter-spacing:.5px;color:#fff;display:flex;align-items:center;gap:8px;}
+  .logo i{display:inline-block;width:9px;height:9px;border-radius:2px;background:linear-gradient(135deg,#4da3ff,#7c5cff);}
+  .spacer{flex:1;}
+  button{appearance:none;border:1px solid #2e3644;background:#222833;color:#dfe5ee;
+    padding:7px 13px;border-radius:8px;font-size:13px;cursor:pointer;transition:.15s;white-space:nowrap;}
+  button:hover{background:#2b3340;border-color:#3d4b60;}
+  button:active{transform:translateY(1px);}
+  button.primary{background:#2f7fff;border-color:#2f7fff;color:#fff;}
+  button.primary:hover{background:#4a92ff;}
+  button.danger{background:#3a1f26;border-color:#5e2b36;color:#ff8a9a;}
+  button.danger:hover{background:#4d2831;border-color:#8b3a49;}
+  button:disabled{opacity:.4;cursor:not-allowed;}
+  .switch{display:flex;align-items:center;gap:6px;font-size:12.5px;color:#8b98ab;
+    padding:6px 10px;border:1px solid #2e3644;border-radius:8px;background:#1c212a;cursor:pointer;user-select:none;}
+  .switch input{accent-color:#2f7fff;cursor:pointer;}
+
+  /* ---------- 主体 ---------- */
+  .body{flex:1;display:flex;min-height:0;}
+  aside{width:264px;flex:0 0 264px;background:#151920;border-right:1px solid #262c36;
+    display:flex;flex-direction:column;min-height:0;}
+  .aside-head{padding:11px 14px;font-size:12.5px;color:#8b98ab;border-bottom:1px solid #222832;
+    display:flex;justify-content:space-between;align-items:center;letter-spacing:.5px;flex:0 0 auto;}
+  .aside-head b{color:#4da3ff;font-weight:600;}
+  .part-list{flex:1;min-height:0;overflow-y:auto;padding:6px;}
+  .part-list::-webkit-scrollbar{width:8px;}
+  .part-list::-webkit-scrollbar-thumb{background:#2b3340;border-radius:4px;}
+  .part-item{display:flex;align-items:center;gap:8px;padding:7px 9px;border-radius:7px;
+    cursor:pointer;font-size:12.5px;margin-bottom:2px;border:1px solid transparent;transition:.12s;}
+  .part-item:hover{background:#1e242e;}
+  .part-item.selected{background:#173052;border-color:#2f7fff;}
+  .part-idx{flex:0 0 26px;color:#5a6678;font-variant-numeric:tabular-nums;font-size:11px;}
+  .part-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#c3cddc;}
+  .part-item.selected .part-name{color:#fff;}
+  .part-count{flex:0 0 auto;color:#5a6678;font-size:11px;}
+  .list-note{padding:10px;font-size:11.5px;color:#6b7789;text-align:center;line-height:1.6;}
+
+  /* ---------- 新增：模型方向调整面板 ---------- */
+  .rotate-panel{flex:0 0 auto;border-top:1px solid #222832;background:#12161d;
+    padding:10px 10px 12px;}
+  .rotate-title{font-size:12px;color:#8b98ab;margin:0 0 8px 2px;letter-spacing:.5px;
+    display:flex;align-items:center;gap:6px;}
+  .rotate-title::before{content:"";width:6px;height:6px;border-radius:50%;
+    background:#7c5cff;box-shadow:0 0 8px #7c5cff;}
+  .rotate-grid{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-bottom:7px;}
+  .rotate-grid button{padding:6px 4px;font-size:11.5px;border-radius:6px;
+    background:#1c212a;border:1px solid #2a323f;color:#c3cddc;letter-spacing:.2px;}
+  .rotate-grid button:hover{background:#252c38;border-color:#3a4453;color:#fff;}
+  .rotate-grid button:active{background:#173052;border-color:#2f7fff;}
+  .ghost-btn{width:100%;padding:6px;font-size:12px;border-radius:6px;
+    background:transparent;border:1px solid #2e3644;color:#8b98ab;}
+  .ghost-btn:hover{background:#1c212a;color:#c3cddc;}
+
+  #viewport{flex:1;position:relative;min-width:0;background:#14171c;overflow:hidden;}
+  #viewport canvas{display:block;width:100%;height:100%;}
+  #viewport.dragover::after{content:"";position:absolute;inset:12px;border:2px dashed #2f7fff;
+    border-radius:14px;background:rgba(47,127,255,.08);pointer-events:none;}
+  .hint{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);
+    background:rgba(15,18,22,.82);border:1px solid #262c36;border-radius:20px;
+    padding:7px 16px;font-size:11.5px;color:#7d8a9d;white-space:nowrap;pointer-events:none;
+    backdrop-filter:blur(6px);max-width:92%;overflow:hidden;text-overflow:ellipsis;}
+
+  footer{height:34px;flex:0 0 34px;display:flex;align-items:center;gap:20px;padding:0 16px;
+    background:#171b22;border-top:1px solid #262c36;font-size:12px;color:#7d8a9d;}
+  footer b{color:#c3cddc;font-weight:600;font-variant-numeric:tabular-nums;}
+
+  /* ---------- 提示条 ---------- */
+  #toast{position:fixed;left:50%;top:70px;transform:translate(-50%,-16px);
+    background:#222833;border:1px solid #38414f;color:#e6ecf5;padding:9px 18px;border-radius:10px;
+    font-size:13px;opacity:0;pointer-events:none;transition:.25s;z-index:99;box-shadow:0 8px 26px rgba(0,0,0,.5);}
+  #toast.show{opacity:1;transform:translate(-50%,0);}
+
+  /* ---------- 加载遮罩 ---------- */
+  #loading{position:fixed;inset:0;background:rgba(10,12,16,.78);display:none;
+    align-items:center;justify-content:center;z-index:100;backdrop-filter:blur(3px);}
+  #loading.show{display:flex;}
+  .spin{width:38px;height:38px;border:3px solid #2b3340;border-top-color:#2f7fff;
+    border-radius:50%;animation:sp .8s linear infinite;}
+  @keyframes sp{to{transform:rotate(360deg);}}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="logo"><i></i>OBJ 模型编辑器</div>
+    <div class="spacer"></div>
+    <label class="switch" title="把每个网格按连通块拆成独立部件，这样才能选中任意一个部位">
+      <input type="checkbox" id="splitToggle" checked> 按连通块拆分
+    </label>
+    <button id="btnOpen">打开 OBJ</button>
+    <button id="btnUndo" title="Ctrl+Z">撤销删除</button>
+    <button id="btnReset">重置模型</button>
+    <button id="btnExport">导出 OBJ</button>
+    <button id="btnDelete" class="danger" title="Delete">删除选中</button>
+    <!-- 上传方式改为查看器的写法：accept="*/*" + display:none -->
+    <input type="file" id="fileInput" accept="*/*" style="display:none">
+  </header>
+
+  <div class="body">
+    <aside>
+      <div class="aside-head"><span>部件列表</span><b id="partCount">0</b></div>
+      <div class="part-list" id="partList"></div>
+
+      <!-- 新增：整体方向调整 -->
+      <div class="rotate-panel">
+        <div class="rotate-title">模型方向调整</div>
+        <div class="rotate-grid">
+          <button type="button" data-axis="x" data-delta="-90">X 轴 -90°</button>
+          <button type="button" data-axis="x" data-delta="90">X 轴 +90°</button>
+          <button type="button" data-axis="y" data-delta="-90">Y 轴 -90°</button>
+          <button type="button" data-axis="y" data-delta="90">Y 轴 +90°</button>
+          <button type="button" data-axis="z" data-delta="-90">Z 轴 -90°</button>
+          <button type="button" data-axis="z" data-delta="90">Z 轴 +90°</button>
+        </div>
+        <button type="button" id="btnResetRotate" class="ghost-btn">重置旋转</button>
+      </div>
+    </aside>
+
+    <main id="viewport">
+      <div class="hint">左键选中 · Shift/Ctrl 多选 · Delete 删除 · Ctrl+Z 撤销 · 拖拽旋转 · 滚轮缩放</div>
+    </main>
+  </div>
+
+  <footer>
+    <span>部件：<b id="statParts">0</b></span>
+    <span>三角面：<b id="statTris">0</b></span>
+    <span>已选中：<b id="statSel">0</b></span>
+    <span style="margin-left:auto">拖入 .obj 文件即可加载</span>
+  </footer>
+</div>
+
+<div id="toast"></div>
+<div id="loading"><div class="spin"></div></div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { OBJLoader }   from 'three/addons/loaders/OBJLoader.js';
+import { OBJExporter } from 'three/addons/exporters/OBJExporter.js';
+
+/* ============================================================
+   1. 基础场景
+   ============================================================ */
+const viewport = document.getElementById('viewport');
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+viewport.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x14171c);
+
+const camera = new THREE.PerspectiveCamera(50, 1, 0.01, 8000);
+camera.position.set(4, 3.2, 6);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.09;
+controls.screenSpacePanning = true;
+
+// 灯光
+scene.add(new THREE.HemisphereLight(0xc3d8ff, 0x2b2f38, 1.9));
+const key = new THREE.DirectionalLight(0xffffff, 2.2); key.position.set(6, 11, 8); scene.add(key);
+const fill = new THREE.DirectionalLight(0xffffff, 0.9); fill.position.set(-7, 4, -6); scene.add(fill);
+const rim = new THREE.DirectionalLight(0x88aaff, 0.7); rim.position.set(-3, -6, 5); scene.add(rim);
+
+// 地面网格
+let gridHelper = new THREE.GridHelper(10, 20, 0x3a4250, 0x232932);
+scene.add(gridHelper);
+
+const modelRoot = new THREE.Group();
+scene.add(modelRoot);
+
+/* ============================================================
+   2. 高亮材质
+   ============================================================ */
+const selMaterial = new THREE.MeshStandardMaterial({
+  color: 0x2f7fff, emissive: 0x123a75, emissiveIntensity: 1.0,
+  roughness: 0.32, metalness: 0.1, side: THREE.DoubleSide
+});
+const hoverMaterial = new THREE.MeshStandardMaterial({
+  color: 0x63d2ff, emissive: 0x144a63, emissiveIntensity: 1.0,
+  roughness: 0.4, metalness: 0.1, side: THREE.DoubleSide
+});
+
+/* ============================================================
+   3. 状态
+   ============================================================ */
+let selected      = new Set();
+let hoveredMesh   = null;
+let undoStack     = [];
+let splitEnabled  = true;
+let originalOBJText = null;
+let currentFileName = 'model';
+let panelItems    = [];
+
+/* ============================================================
+   4. 工具函数
+   ============================================================ */
+const $ = id => document.getElementById(id);
+
+function toast(msg) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => t.classList.remove('show'), 1900);
+}
+function showLoading(v) { $('loading').classList.toggle('show', v); }
+
+function getParts() {
+  const list = [];
+  modelRoot.traverse(o => { if (o.isMesh && o.geometry && o.geometry.attributes.position) list.push(o); });
+  return list;
+}
+function triCountOf(mesh) {
+  const g = mesh.geometry;
+  return Math.floor((g.index ? g.index.count : g.attributes.position.count) / 3);
+}
+
+/* ============================================================
+   5. 连通块拆分（核心：让任何模型都能"选中任意一个部位"）
+   ============================================================ */
+function splitGeometry(geometry) {
+  const pos = geometry.attributes.position;
+  if (!pos) return [geometry];
+
+  const index = geometry.index;
+  const triCount = index ? Math.floor(index.count / 3) : Math.floor(pos.count / 3);
+  if (triCount === 0) return [geometry];
+
+  const vCount = pos.count;
+  const keyMap = new Map();
+  const weld = new Int32Array(vCount);
+  const P = 1e4;
+
+  for (let i = 0; i < vCount; i++) {
+    const kx = Math.round(pos.getX(i) * P);
+    const ky = Math.round(pos.getY(i) * P);
+    const kz = Math.round(pos.getZ(i) * P);
+    const key = kx + '|' + ky + '|' + kz;
+    let id = keyMap.get(key);
+    if (id === undefined) { id = keyMap.size; keyMap.set(key, id); }
+    weld[i] = id;
+  }
+
+  const uCount = keyMap.size;
+  if (uCount === 0) return [geometry];
+
+  const parent = new Int32Array(uCount);
+  for (let i = 0; i < uCount; i++) parent[i] = i;
+
+  function find(x) {
+    let r = x;
+    while (parent[r] !== r) r = parent[r];
+    while (parent[x] !== r) { const nx = parent[x]; parent[x] = r; x = nx; }
+    return r;
+  }
+  function union(a, b) {
+    a = find(a); b = find(b);
+    if (a !== b) parent[a] = b;
+  }
+
+  const vAt = (t, k) => index ? index.getX(t * 3 + k) : t * 3 + k;
+
+  for (let t = 0; t < triCount; t++) {
+    const a = weld[vAt(t, 0)], b = weld[vAt(t, 1)], c = weld[vAt(t, 2)];
+    union(a, b); union(b, c);
+  }
+
+  const groups = new Map();
+  for (let t = 0; t < triCount; t++) {
+    const i0 = vAt(t, 0), i1 = vAt(t, 1), i2 = vAt(t, 2);
+    const root = find(weld[i0]);
+    let arr = groups.get(root);
+    if (!arr) { arr = []; groups.set(root, arr); }
+    arr.push(i0, i1, i2);
+  }
+
+  if (groups.size <= 1) return [geometry];
+
+  const attrNames = Object.keys(geometry.attributes);
+  const out = [];
+
+  for (const arr of groups.values()) {
+    const n = arr.length;
+    const g = new THREE.BufferGeometry();
+    for (const name of attrNames) {
+      const src = geometry.attributes[name];
+      const is = src.itemSize;
+      const sa = src.array;
+      const dst = new Float32Array(n * is);
+      for (let k = 0; k < n; k++) {
+        const vi = arr[k];
+        const o1 = k * is, o2 = vi * is;
+        for (let c = 0; c < is; c++) dst[o1 + c] = sa[o2 + c];
+      }
+      g.setAttribute(name, new THREE.BufferAttribute(dst, is, src.normalized));
+    }
+    g.computeBoundingBox();
+    g.computeBoundingSphere();
+    out.push(g);
+  }
+  return out.length ? out : [geometry];
+}
+
+function processModel(root) {
+  const meshes = [];
+  root.traverse(o => { if (o.isMesh) meshes.push(o); });
+
+  let counter = 1;
+  for (const mesh of meshes) {
+    let geoms;
+    try { geoms = splitGeometry(mesh.geometry); }
+    catch (err) { console.warn('拆分失败', err); continue; }
+
+    if (!geoms || geoms.length <= 1) {
+      if (!mesh.name) mesh.name = '部件 ' + (counter++);
+      continue;
+    }
+
+    const parent = mesh.parent;
+    const base = (mesh.name && mesh.name.trim()) ? mesh.name.trim() : '部件';
+    const group = new THREE.Group();
+    group.name = base;
+
+    geoms.forEach((g, i) => {
+      const m = new THREE.Mesh(g, mesh.material);
+      m.name = base + ' ' + (i + 1);
+      m.userData._state = 'none';
+      group.add(m);
+    });
+
+    parent.add(group);
+    parent.remove(mesh);
+    mesh.geometry.dispose();
+  }
+}
+
+function nameUntitledParts(root) {
+  let counter = 1;
+  root.traverse(o => {
+    if (o.isMesh && !o.name) o.name = '部件 ' + (counter++);
+  });
+}
+
+/* ============================================================
+   6. 材质 / 选中态
+   ============================================================ */
+function setMeshState(mesh) {
+  const state = selected.has(mesh) ? 'sel' : (mesh === hoveredMesh ? 'hov' : 'none');
+  if (mesh.userData._state === state) return;
+  mesh.userData._state = state;
+
+  if (state === 'none') {
+    if (mesh.userData._origMaterial !== undefined) {
+      mesh.material = mesh.userData._origMaterial;
+      delete mesh.userData._origMaterial;
+    }
+  } else {
+    if (mesh.userData._origMaterial === undefined) {
+      mesh.userData._origMaterial = mesh.material;
+    }
+    mesh.material = state === 'sel' ? selMaterial : hoverMaterial;
+  }
+}
+
+function applyAllStates() {
+  modelRoot.traverse(o => { if (o.isMesh) setMeshState(o); });
+}
+
+function clearSelection() {
+  if (selected.size === 0) return;
+  const list = [...selected];
+  selected.clear();
+  list.forEach(setMeshState);
+  updateSelectionUI();
+}
+
+function selectOnly(mesh) {
+  clearSelection();
+  if (mesh) { selected.add(mesh); setMeshState(mesh); }
+  updateSelectionUI();
+}
+
+function selectAll() {
+  const parts = getParts();
+  selected.clear();
+  parts.forEach(m => selected.add(m));
+  applyAllStates();
+  updateSelectionUI();
+}
+
+/* ============================================================
+   7. 删除 / 撤销
+   ============================================================ */
+function deleteSelected() {
+  if (selected.size === 0) { toast('请先选中要删除的部位'); return; }
+
+  const records = [];
+  for (const mesh of selected) {
+    const parent = mesh.parent;
+    if (!parent) continue;
+    records.push({ mesh, parent, index: parent.children.indexOf(mesh) });
+
+    // 还原材质再移除
+    if (mesh.userData._origMaterial !== undefined) {
+      mesh.material = mesh.userData._origMaterial;
+      delete mesh.userData._origMaterial;
+    }
+    mesh.userData._state = 'none';
+    parent.remove(mesh);
+  }
+
+  const count = records.length;
+  selected.clear();
+  if (hoveredMesh && records.some(r => r.mesh === hoveredMesh)) hoveredMesh = null;
+  if (count) undoStack.push(records);
+
+  refreshPanel();
+  toast('已删除 ' + count + ' 个部位');
+}
+
+function undo() {
+  const records = undoStack.pop();
+  if (!records) { toast('没有可撤销的操作'); return; }
+  for (const r of records) {
+    if (r.parent) r.parent.add(r.mesh);
+  }
+  selected.clear();
+  hoveredMesh = null;
+  applyAllStates();
+  refreshPanel();
+  toast('已撤销');
+}
+
+/* ============================================================
+   8. 侧栏列表
+   ============================================================ */
+const partListEl = $('partList');
+
+function refreshPanel() {
+  const parts = getParts();
+  const st = partListEl.scrollTop;
+  partListEl.innerHTML = '';
+  panelItems = [];
+
+  const MAX = 600;
+  const shown = parts.slice(0, MAX);
+
+  shown.forEach((mesh, i) => {
+    const item = document.createElement('div');
+    item.className = 'part-item';
+
+    const idx = document.createElement('span');
+    idx.className = 'part-idx';
+    idx.textContent = i + 1;
+
+    const name = document.createElement('span');
+    name.className = 'part-name';
+    name.textContent = mesh.name || ('部件 ' + (i + 1));
+    name.title = name.textContent;
+
+    const cnt = document.createElement('span');
+    cnt.className = 'part-count';
+    cnt.textContent = triCountOf(mesh) + '▲';
+
+    item.append(idx, name, cnt);
+
+    item.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const additive = ev.shiftKey || ev.ctrlKey || ev.metaKey;
+      if (additive) {
+        if (selected.has(mesh)) selected.delete(mesh); else selected.add(mesh);
+      } else {
+        const only = selected.size === 1 && selected.has(mesh);
+        selected.clear();
+        if (!only) selected.add(mesh);
+      }
+      applyAllStates();
+      updateSelectionUI();
+    });
+
+    partListEl.appendChild(item);
+    panelItems.push({ mesh, el: item });
+  });
+
+  if (parts.length > MAX) {
+    const note = document.createElement('div');
+    note.className = 'list-note';
+    note.textContent = `仅列出前 ${MAX} 个部件，其余请直接在视口中点选`;
+    partListEl.appendChild(note);
+  }
+
+  partListEl.scrollTop = st;
+  $('partCount').textContent = parts.length;
+  updateSelectionUI();
+}
+
+function updateSelectionUI() {
+  for (const { mesh, el } of panelItems) {
+    el.classList.toggle('selected', selected.has(mesh));
+  }
+  updateStats();
+}
+
+function updateStats() {
+  const parts = getParts();
+  let tris = 0;
+  for (const m of parts) tris += triCountOf(m);
+  $('statParts').textContent = parts.length;
+  $('statTris').textContent = tris.toLocaleString('zh-CN');
+  $('statSel').textContent = selected.size;
+}
+
+function scrollPanelTo(mesh) {
+  const found = panelItems.find(p => p.mesh === mesh);
+  if (found) found.el.scrollIntoView({ block: 'nearest' });
+}
+
+/* ============================================================
+   9. 拾取 / 交互
+   ============================================================ */
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();
+let downPos = null;
+let hoverRaf = 0;
+let pendingHoverEvt = null;
+
+function pick(ev) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  pointer.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
+  pointer.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
+  raycaster.setFromCamera(pointer, camera);
+
+  const parts = getParts();
+  if (!parts.length) return null;
+  const hits = raycaster.intersectObjects(parts, false);
+  return hits.length ? hits[0].object : null;
+}
+
+function updateHover(ev) {
+  if (ev.buttons !== 0) return;
+  const mesh = pick(ev);
+  if (mesh === hoveredMesh) return;
+
+  const prev = hoveredMesh;
+  hoveredMesh = mesh;
+  if (prev) setMeshState(prev);
+  if (mesh) setMeshState(mesh);
+  renderer.domElement.style.cursor = mesh ? 'pointer' : 'default';
+}
+
+renderer.domElement.addEventListener('pointerdown', (e) => {
+  if (e.button === 0) downPos = { x: e.clientX, y: e.clientY };
+});
+
+renderer.domElement.addEventListener('pointerup', (e) => {
+  if (e.button !== 0) return;
+  if (!downPos) return;
+  const dx = e.clientX - downPos.x;
+  const dy = e.clientY - downPos.y;
+  downPos = null;
+  if (dx * dx + dy * dy > 25) return;   // 拖动过，不算点击
+
+  const mesh = pick(e);
+  const additive = e.shiftKey || e.ctrlKey || e.metaKey;
+
+  if (!mesh) {
+    if (!additive) clearSelection();
+    return;
+  }
+
+  if (additive) {
+    if (selected.has(mesh)) selected.delete(mesh); else selected.add(mesh);
+  } else {
+    if (selected.size === 1 && selected.has(mesh)) {
+      // 已经单选它了，保持不变
+    } else {
+      selected.clear();
+      selected.add(mesh);
+    }
+  }
+  applyAllStates();
+  updateSelectionUI();
+  scrollPanelTo(mesh);
+});
+
+renderer.domElement.addEventListener('pointermove', (e) => {
+  pendingHoverEvt = e;
+  if (hoverRaf) return;
+  hoverRaf = requestAnimationFrame(() => {
+    hoverRaf = 0;
+    const ev = pendingHoverEvt;
+    pendingHoverEvt = null;
+    if (ev) updateHover(ev);
+  });
+});
+
+renderer.domElement.addEventListener('pointerleave', () => {
+  if (hoveredMesh) {
+    const m = hoveredMesh;
+    hoveredMesh = null;
+    setMeshState(m);
+  }
+  renderer.domElement.style.cursor = 'default';
+});
+
+/* 键盘 */
+window.addEventListener('keydown', (e) => {
+  const tag = (e.target.tagName || '').toLowerCase();
+  if (tag === 'input' || tag === 'textarea') return;
+
+  if (e.key === 'Delete' || e.key === 'Backspace') {
+    e.preventDefault();
+    deleteSelected();
+  } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+    e.preventDefault();
+    undo();
+  } else if (e.key === 'Escape') {
+    clearSelection();
+  } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+    e.preventDefault();
+    selectAll();
+  }
+});
+
+/* ============================================================
+   10. 模型加载 / 清空 / 适配
+   ============================================================ */
+function makeStandardMaterial(srcMat) {
+  if (srcMat && srcMat.isMeshStandardMaterial) return srcMat;
+  return new THREE.MeshStandardMaterial({
+    color: (srcMat && srcMat.color) ? srcMat.color.clone() : new THREE.Color(0xc8ccd4),
+    map: (srcMat && srcMat.map) ? srcMat.map : null,
+    roughness: 0.62,
+    metalness: 0.12,
+    side: THREE.DoubleSide
+  });
+}
+
+function clearModel() {
+  selected.clear();
+  hoveredMesh = null;
+  undoStack.length = 0;
+
+  const mats = new Set();
+  modelRoot.traverse(o => {
+    if (o.isMesh) {
+      o.geometry.dispose();
+      if (o.material) mats.add(o.material);
+    }
+  });
+  mats.forEach(m => {
+    if (m !== selMaterial && m !== hoverMaterial) m.dispose();
+  });
+  modelRoot.clear();
+
+  // 重置整体变换
+  modelRoot.position.set(0, 0, 0);
+  modelRoot.rotation.set(0, 0, 0);
+  modelRoot.scale.set(1, 1, 1);
+  modelRoot.updateMatrixWorld(true);
+}
+
+function setModel(object3D, fileName) {
+  clearModel();
+
+  object3D.traverse(o => {
+    if (o.isMesh) {
+      if (!o.geometry.attributes.normal) o.geometry.computeVertexNormals();
+      o.material = makeStandardMaterial(o.material);
+      o.userData._state = 'none';
+      o.castShadow = false;
+      o.receiveShadow = false;
+    }
+  });
+
+  modelRoot.add(object3D);
+
+  if (splitEnabled) processModel(object3D);
+  else nameUntitledParts(object3D);
+
+  // 把模型几何中心平移到 modelRoot 原点，
+  // 这样绕 X/Y/Z 轴旋转时，就是绕模型自己的中心旋转。
+  const box0 = new THREE.Box3().setFromObject(object3D);
+  if (!box0.isEmpty()) {
+    const c0 = box0.getCenter(new THREE.Vector3());
+    object3D.position.sub(c0);
+  }
+  object3D.updateMatrixWorld(true);
+
+  currentFileName = fileName || 'model';
+  refreshPanel();
+  updateStats();
+  fitCamera(object3D);
+}
+
+function loadOBJText(text, fileName) {
+  showLoading(true);
+  // 让浏览器有机会渲染遮罩
+  setTimeout(() => {
+    try {
+      const loader = new OBJLoader();
+      const obj = loader.parse(text);
+      originalOBJText = text;
+      setModel(obj, fileName);
+      toast('已加载：' + fileName);
+    } catch (err) {
+      console.error(err);
+      toast('OBJ 解析失败：' + err.message);
+    } finally {
+      showLoading(false);
+    }
+  }, 30);
+}
+
+function fitCamera(object) {
+  const box = new THREE.Box3().setFromObject(object);
+  if (box.isEmpty()) return;
+
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  const maxDim = Math.max(size.x, size.y, size.z) || 1;
+
+  const fov = camera.fov * Math.PI / 180;
+  let dist = (maxDim / 2) / Math.tan(fov / 2);
+  dist *= 1.7;
+
+  const dir = new THREE.Vector3(1, 0.75, 1).normalize();
+  camera.position.copy(center).addScaledVector(dir, dist);
+  camera.near = Math.max(dist / 500, 0.001);
+  camera.far = dist * 200;
+  camera.updateProjectionMatrix();
+
+  controls.target.copy(center);
+  controls.minDistance = maxDim * 0.05;
+  controls.maxDistance = maxDim * 40;
+  controls.update();
+
+  // 网格自适应
+  const gridSize = Math.pow(10, Math.round(Math.log10(maxDim * 2.2)));
+  scene.remove(gridHelper);
+  gridHelper.geometry.dispose();
+  gridHelper = new THREE.GridHelper(gridSize, 20, 0x3a4250, 0x232932);
+  gridHelper.position.y = box.min.y;
+  scene.add(gridHelper);
+}
+
+/* ============================================================
+   11. 整体方向调整（新增）
+   ============================================================ */
+function normalizeAngle(a) {
+  while (a >  Math.PI) a -= Math.PI * 2;
+  while (a < -Math.PI) a += Math.PI * 2;
+  return a;
+}
+
+/**
+ * 绕指定轴旋转整个模型（modelRoot）
+ * @param {'x'|'y'|'z'} axis
+ * @param {number} deltaDeg 角度增量（度）
+ */
+function rotateModel(axis, deltaDeg) {
+  if (getParts().length === 0) { toast('请先加载模型'); return; }
+
+  const rad = deltaDeg * Math.PI / 180;
+  modelRoot.rotation[axis] = normalizeAngle(modelRoot.rotation[axis] + rad);
+  modelRoot.updateMatrixWorld(true);
+  controls.update();
+
+  const deg = ((modelRoot.rotation[axis] * 180 / Math.PI) % 360).toFixed(0);
+  toast(`${axis.toUpperCase()} 轴：${deg}°`);
+}
+
+function resetRotation() {
+  if (getParts().length === 0) { toast('请先加载模型'); return; }
+  modelRoot.rotation.set(0, 0, 0);
+  modelRoot.updateMatrixWorld(true);
+  controls.update();
+  toast('已重置旋转');
+}
+
+// 绑定旋转按钮
+document.querySelectorAll('.rotate-grid button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    rotateModel(btn.dataset.axis, Number(btn.dataset.delta));
+  });
+});
+$('btnResetRotate').addEventListener('click', resetRotation);
+
+/* ============================================================
+   12. 文件读写
+   ============================================================ */
+
+/* 上传方式改为查看器的写法：
+   按钮负责触发隐藏 input，change 里取值并复位 input.value */
+const fileInput = $('fileInput');
+
+$('btnOpen').addEventListener('click', function () {
+  fileInput.click();
+});
+
+fileInput.addEventListener('change', function (e) {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  readFile(file);
+  this.value = '';          // 允许重复选择同一个文件
+});
+
+function readFile(file) {
+  if (!/\.obj$/i.test(file.name)) { toast('请选择 .obj 文件'); return; }
+  const reader = new FileReader();
+  reader.onload = () => loadOBJText(String(reader.result), file.name);
+  reader.onerror = () => toast('文件读取失败');
+  reader.readAsText(file, 'utf-8');
+}
+
+['dragenter', 'dragover'].forEach(t => {
+  viewport.addEventListener(t, (e) => { e.preventDefault(); viewport.classList.add('dragover'); });
+});
+['dragleave', 'drop'].forEach(t => {
+  viewport.addEventListener(t, (e) => { e.preventDefault(); viewport.classList.remove('dragover'); });
+});
+viewport.addEventListener('drop', (e) => {
+  const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+  if (f) readFile(f);
+});
+
+/* 导出：把当前 modelRoot 的旋转烘进导出的 OBJ 里 */
+$('btnExport').addEventListener('click', () => {
+  const parts = getParts();
+  if (!parts.length) { toast('没有可导出的几何体'); return; }
+  try {
+    // OBJExporter 不处理父级变换，这里把旋转矩阵临时烘进几何体
+    const m = modelRoot.matrixWorld.clone();
+    const snapshot = [];
+
+    modelRoot.traverse(o => {
+      if (!o.isMesh) return;
+      const g = o.geometry.clone();
+      g.applyMatrix4(o.matrixWorld);
+      snapshot.push({ orig: o.geometry, temp: g, mesh: o });
+      o.geometry = g;
+    });
+
+    // 临时把 modelRoot 及子级变换归零，避免重复变换
+    const rotSave = modelRoot.rotation.clone();
+    modelRoot.rotation.set(0, 0, 0);
+    modelRoot.updateMatrixWorld(true);
+
+    const text = new OBJExporter().parse(modelRoot);
+
+    // 还原
+    modelRoot.rotation.copy(rotSave);
+    modelRoot.updateMatrixWorld(true);
+    snapshot.forEach(s => { s.mesh.geometry = s.orig; s.temp.dispose(); });
+
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = currentFileName.replace(/\.obj$/i, '') + '_edited.obj';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    toast('已导出 OBJ');
+  } catch (err) {
+    console.error(err);
+    toast('导出失败：' + err.message);
+  }
+});
+
+/* 按钮绑定 */
+$('btnDelete').addEventListener('click', deleteSelected);
+$('btnUndo').addEventListener('click', undo);
+$('btnReset').addEventListener('click', () => {
+  if (!originalOBJText) { toast('没有可重置的模型'); return; }
+  loadOBJText(originalOBJText, currentFileName);
+  toast('已重置模型');
+});
+$('splitToggle').addEventListener('change', (e) => {
+  splitEnabled = e.target.checked;
+  if (!originalOBJText) return;
+  loadOBJText(originalOBJText, currentFileName);
+  toast(splitEnabled ? '已开启连通块拆分' : '已关闭连通块拆分');
+});
+
+/* ============================================================
+   13. 演示模型
+   ============================================================ */
+function toOBJ(geometry, name) {
+  const p = geometry.attributes.position;
+  const n = geometry.attributes.normal;
+  let s = 'o ' + name + '\n';
+  for (let i = 0; i < p.count; i++) {
+    s += `v ${p.getX(i).toFixed(6)} ${p.getY(i).toFixed(6)} ${p.getZ(i).toFixed(6)}\n`;
+  }
+  if (n) {
+    for (let i = 0; i < n.count; i++) {
+      s += `vn ${n.getX(i).toFixed(4)} ${n.getY(i).toFixed(4)} ${n.getZ(i).toFixed(4)}\n`;
+    }
+  }
+  for (let i = 0; i < p.count; i += 3) {
+    const a = i + 1, b = i + 2, c = i + 3;
+    s += n ? `f ${a}//${a} ${b}//${b} ${c}//${c}\n` : `f ${a} ${b} ${c}\n`;
+  }
+  return s;
+}
+
+function buildDemoOBJ() {
+  let s = '# demo scene\n';
+
+  const box = new THREE.BoxGeometry(1.1, 1.1, 1.1).toNonIndexed();
+  box.translate(-1.6, 0.55, 0);
+  s += toOBJ(box, '立方体');
+
+  const sphere = new THREE.SphereGeometry(0.7, 28, 18).toNonIndexed();
+  sphere.translate(0, 0.7, 0);
+  s += toOBJ(sphere, '球体');
+
+  const torus = new THREE.TorusGeometry(0.55, 0.22, 18, 36).toNonIndexed();
+  torus.rotateX(Math.PI / 2);
+  torus.translate(1.7, 0.55, 0);
+  s += toOBJ(torus, '圆环');
+
+  const cyl = new THREE.CylinderGeometry(0.4, 0.4, 0.9, 24).toNonIndexed();
+  cyl.translate(0, 0.45, -1.7);
+  s += toOBJ(cyl, '圆柱');
+
+  const cone = new THREE.ConeGeometry(0.5, 1.0, 24).toNonIndexed();
+  cone.translate(-1.6, 0.5, -1.7);
+  s += toOBJ(cone, '圆锥');
+
+  const cube2 = new THREE.BoxGeometry(0.8, 0.8, 0.8).toNonIndexed();
+  cube2.translate(1.7, 0.4, -1.7);
+  s += toOBJ(cube2, '方块');
+
+  return s;
+}
+
+/* ============================================================
+   14. 启动
+   ============================================================ */
+let lastW = 0, lastH = 0;
+
+function animate() {
+  requestAnimationFrame(animate);
+
+  const w = viewport.clientWidth;
+  const h = viewport.clientHeight;
+  if (w !== lastW || h !== lastH) {
+    lastW = w; lastH = h;
+    if (w > 0 && h > 0) {
+      renderer.setSize(w, h, false);
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+    }
+  }
+
+  controls.update();
+  renderer.render(scene, camera);
+}
+
+// 初始加载演示模型
+loadOBJText(buildDemoOBJ(), 'demo.obj');
+
+animate();
+</script>
+</body>
+</html>
