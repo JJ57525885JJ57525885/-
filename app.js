@@ -1,16 +1,75 @@
 /* =========================================================
    一、通用工具
-   （escapeHtml 由 highlight.js 提供）
    ========================================================= */
 const STORAGE_KEY = 'mini_code_editor_projects_v4';
 const THEME_KEY = 'mini_code_editor_theme';
+const FONT_KEY = 'mini_code_editor_font_size';
 const IDB_NAME = 'mini_code_editor_db';
-const IDB_VERSION = 1;
+const IDB_VERSION = 3;
 const IDB_STORE = 'kv';
 const IDB_KEY = 'projects';
 const BACKUP_KEY = STORAGE_KEY + '_backup';
 
+const FONT_MIN = 8;
+const FONT_MAX = 28;
+const FONT_DEFAULT = 14;
+
+const HIGHLIGHT_LIMIT = 30000;
+const LINE_NUMBER_LIMIT = 200000;
+const PASTE_HIGHLIGHT_DELAY = 200;
+
+const PASTE_CHUNK_SIZE = 30000;
+const PASTE_MIN_TRIGGER = 5000;
+
+const UPLOAD_CONCURRENCY = 15;
+const TREE_MAX_RENDER = 300;
+
 let storageWarned = false;
+let editorFontSize = FONT_DEFAULT;
+
+/* ===== OPFS 支持检测 ===== */
+const OPFS_SUPPORTED = !!(navigator.storage && navigator.storage.getDirectory);
+let _opfsRootPromise = null;
+
+function getOpfsRoot() {
+    if (_opfsRootPromise) return _opfsRootPromise;
+    if (!OPFS_SUPPORTED) return Promise.reject(new Error('OPFS 不支持'));
+    _opfsRootPromise = navigator.storage.getDirectory();
+    return _opfsRootPromise;
+}
+
+async function opfsGetProjectDir(projectId, create) {
+    const root = await getOpfsRoot();
+    return root.getDirectoryHandle('proj_' + projectId, { create: !!create });
+}
+
+async function opfsWrite(projectId, fileId, blob) {
+    const dir = await opfsGetProjectDir(projectId, true);
+    const fh = await dir.getFileHandle(fileId, { create: true });
+    const w = await fh.createWritable();
+    await w.write(blob);
+    await w.close();
+}
+
+async function opfsRead(projectId, fileId) {
+    const dir = await opfsGetProjectDir(projectId, false);
+    const fh = await dir.getFileHandle(fileId);
+    return fh.getFile();
+}
+
+async function opfsDelete(projectId, fileId) {
+    try {
+        const dir = await opfsGetProjectDir(projectId, false);
+        await dir.removeEntry(fileId);
+    } catch (e) {}
+}
+
+async function opfsDeleteProject(projectId) {
+    try {
+        const root = await getOpfsRoot();
+        await root.removeEntry('proj_' + projectId, { recursive: true });
+    } catch (e) {}
+}
 
 function genId(prefix) {
     return prefix + '_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);
@@ -32,7 +91,6 @@ function showToast(msg) {
     toastTimer = setTimeout(function () { el.classList.remove('show'); }, 1400);
 }
 
-/* ★ 保存指示灯 */
 let _saveIndicatorTimer = null;
 function flashSaveIndicator() {
     const el = document.getElementById('saveIndicator');
@@ -45,7 +103,7 @@ function flashSaveIndicator() {
 }
 
 /* =========================================================
-   一.5、IndexedDB 持久化（支持大文件）
+   二、IndexedDB（只存项目元数据）
    ========================================================= */
 let _idbPromise = null;
 
@@ -88,23 +146,62 @@ function idbSet(key, value) {
     });
 }
 
+/* ===== 文件内容的读写（走 OPFS） ===== */
+const _fileContentCache = Object.create(null);
+const _blobUrlCache = Object.create(null);
+
+async function loadFileContent(projectId, fileId) {
+    if (fileId in _fileContentCache) return _fileContentCache[fileId];
+    if (!OPFS_SUPPORTED) return null;
+    try {
+        const f = await opfsRead(projectId, fileId);
+        const text = await f.text();
+        _fileContentCache[fileId] = text;
+        return text;
+    } catch (e) {
+        console.warn('OPFS 读失败：', fileId, e);
+        return null;
+    }
+}
+
+function getBlobUrl(projectId, fileId) {
+    if (_blobUrlCache[fileId]) return _blobUrlCache[fileId];
+    return null;
+}
+
+async function ensureBlobUrl(projectId, fileId) {
+    if (_blobUrlCache[fileId]) return _blobUrlCache[fileId];
+    if (!OPFS_SUPPORTED) return null;
+    try {
+        const f = await opfsRead(projectId, fileId);
+        const url = URL.createObjectURL(f);
+        _blobUrlCache[fileId] = url;
+        return url;
+    } catch (e) {
+        console.warn('OPFS Blob URL 失败：', fileId, e);
+        return null;
+    }
+}
+
+function revokeBlobUrl(fileId) {
+    if (_blobUrlCache[fileId]) {
+        try { URL.revokeObjectURL(_blobUrlCache[fileId]); } catch (e) {}
+        delete _blobUrlCache[fileId];
+    }
+}
+
 /* =========================================================
-   ★ 一.6、主题切换
+   三、主题切换
    ========================================================= */
 function initTheme() {
     let theme = 'dark';
-    try {
-        theme = localStorage.getItem(THEME_KEY) || 'dark';
-    } catch (e) {}
+    try { theme = localStorage.getItem(THEME_KEY) || 'dark'; } catch (e) {}
     applyTheme(theme);
 }
 
 function applyTheme(theme) {
-    if (theme === 'light') {
-        document.body.classList.add('light-theme');
-    } else {
-        document.body.classList.remove('light-theme');
-    }
+    if (theme === 'light') document.body.classList.add('light-theme');
+    else document.body.classList.remove('light-theme');
     const menu = document.getElementById('themeMenu');
     if (menu) {
         const items = menu.querySelectorAll('.theme-menu-item');
@@ -137,13 +234,11 @@ document.addEventListener('click', function (e) {
     const menu = document.getElementById('themeMenu');
     const btn = document.getElementById('themeBtn');
     if (!menu || !btn) return;
-    if (!menu.contains(e.target) && !btn.contains(e.target)) {
-        closeThemeMenu();
-    }
+    if (!menu.contains(e.target) && !btn.contains(e.target)) closeThemeMenu();
 });
 
 /* =========================================================
-   二、运行日志系统
+   四、运行日志系统
    ========================================================= */
 let warnLogs = [];
 let warnMissingSet = new Set();
@@ -180,10 +275,8 @@ function renderWarnList() {
 
     badgeEl.textContent = total > 99 ? '99+' : String(total);
     badgeEl.classList.add('show');
-
     if (errCount > 0) btnEl.classList.add('has-errors');
     else btnEl.classList.remove('has-errors');
-
     if (countEl) countEl.textContent = ' · ' + errCount + ' 个错误 / ' + total + ' 条';
 
     listEl.innerHTML = warnLogs.map(function (log) {
@@ -191,10 +284,8 @@ function renderWarnList() {
         return '<div class="warn-item ' + log.type + '">' +
             '<span class="warn-icon">' + icon + '</span>' +
             '<span class="warn-text">' + escapeHtml(log.data) + '</span>' +
-            '<span class="warn-time">' + log.time + '</span>' +
-            '</div>';
+            '<span class="warn-time">' + log.time + '</span></div>';
     }).join('');
-
     listEl.scrollTop = listEl.scrollHeight;
 }
 
@@ -223,22 +314,17 @@ window.addEventListener('message', function (e) {
 });
 
 /* =========================================================
-   三、警告按钮拖动
+   五、警告按钮拖动
    ========================================================= */
 (function initWarnButton() {
     const btn = document.getElementById('warnBtn');
     if (!btn) return;
 
-    let isDragging = false;
-    let dragMoved = false;
-    let startX = 0, startY = 0;
-    let dragOffsetX = 0, dragOffsetY = 0;
-    let savedPos = null;
-    let activePointerId = null;
-    let savedHtmlOverflow = '';
-    let savedBodyOverflow = '';
-    let savedHtmlTouch = '';
-    let savedBodyTouch = '';
+    let isDragging = false, dragMoved = false;
+    let startX = 0, startY = 0, dragOffsetX = 0, dragOffsetY = 0;
+    let savedPos = null, activePointerId = null;
+    let savedHtmlOverflow = '', savedBodyOverflow = '';
+    let savedHtmlTouch = '', savedBodyTouch = '';
 
     function getViewportSize() {
         const de = document.documentElement;
@@ -249,10 +335,8 @@ window.addEventListener('message', function (e) {
 
     function applyPos(x, y) {
         const vp = getViewportSize();
-        const bw = btn.offsetWidth;
-        const bh = btn.offsetHeight;
-        const maxX = Math.max(0, vp.w - bw);
-        const maxY = Math.max(0, vp.h - bh);
+        const bw = btn.offsetWidth, bh = btn.offsetHeight;
+        const maxX = Math.max(0, vp.w - bw), maxY = Math.max(0, vp.h - bh);
         const nx = Math.max(4, Math.min(maxX - 4, x));
         const ny = Math.max(4, Math.min(maxY - 4, y));
         btn.style.left = nx + 'px';
@@ -266,17 +350,10 @@ window.addEventListener('message', function (e) {
         if (!isDragging) return;
         if (activePointerId !== null && e.pointerId !== undefined && e.pointerId !== activePointerId) return;
         if (e.isPrimary === false) return;
-
         let cx, cy;
-        if (e.touches && e.touches.length > 0) {
-            cx = e.touches[0].clientX;
-            cy = e.touches[0].clientY;
-        } else {
-            cx = e.clientX;
-            cy = e.clientY;
-        }
+        if (e.touches && e.touches.length > 0) { cx = e.touches[0].clientX; cy = e.touches[0].clientY; }
+        else { cx = e.clientX; cy = e.clientY; }
         if (cx === undefined || cy === undefined) return;
-
         if (!dragMoved) {
             if (Math.abs(cx - startX) < 4 && Math.abs(cy - startY) < 4) return;
             dragMoved = true;
@@ -286,33 +363,23 @@ window.addEventListener('message', function (e) {
     }
 
     function lockScroll() {
-        const html = document.documentElement;
-        const body = document.body;
-        savedHtmlOverflow = html.style.overflow;
-        savedBodyOverflow = body.style.overflow;
-        savedHtmlTouch = html.style.touchAction;
-        savedBodyTouch = body.style.touchAction;
-        html.style.overflow = 'hidden';
-        body.style.overflow = 'hidden';
-        html.style.touchAction = 'none';
-        body.style.touchAction = 'none';
+        const html = document.documentElement, body = document.body;
+        savedHtmlOverflow = html.style.overflow; savedBodyOverflow = body.style.overflow;
+        savedHtmlTouch = html.style.touchAction; savedBodyTouch = body.style.touchAction;
+        html.style.overflow = 'hidden'; body.style.overflow = 'hidden';
+        html.style.touchAction = 'none'; body.style.touchAction = 'none';
     }
 
     function unlockScroll() {
-        const html = document.documentElement;
-        const body = document.body;
-        html.style.overflow = savedHtmlOverflow;
-        body.style.overflow = savedBodyOverflow;
-        html.style.touchAction = savedHtmlTouch;
-        body.style.touchAction = savedBodyTouch;
+        const html = document.documentElement, body = document.body;
+        html.style.overflow = savedHtmlOverflow; body.style.overflow = savedBodyOverflow;
+        html.style.touchAction = savedHtmlTouch; body.style.touchAction = savedBodyTouch;
     }
 
     function onEnd(e) {
         if (!isDragging) return;
         if (activePointerId !== null && e.pointerId !== undefined && e.pointerId !== activePointerId) return;
-
         isDragging = false;
-
         document.removeEventListener('pointermove', onMove, true);
         document.removeEventListener('pointerup', onEnd, true);
         document.removeEventListener('pointercancel', onEnd, true);
@@ -328,37 +395,26 @@ window.addEventListener('message', function (e) {
         window.removeEventListener('mouseup', onEnd, true);
         window.removeEventListener('touchmove', onMove, true);
         window.removeEventListener('touchend', onEnd, true);
-
-        try {
-            if (activePointerId !== null) btn.releasePointerCapture(activePointerId);
-        } catch (err) {}
+        try { if (activePointerId !== null) btn.releasePointerCapture(activePointerId); } catch (err) {}
         activePointerId = null;
-
         document.body.classList.remove('dragging-warn');
         btn.style.zIndex = '';
         unlockScroll();
-
         setTimeout(function () { dragMoved = false; }, 100);
     }
 
     function startDrag(clientX, clientY, pointerId) {
         const rect = btn.getBoundingClientRect();
-        dragOffsetX = clientX - rect.left;
-        dragOffsetY = clientY - rect.top;
-        startX = clientX;
-        startY = clientY;
-        isDragging = true;
-        dragMoved = false;
+        dragOffsetX = clientX - rect.left; dragOffsetY = clientY - rect.top;
+        startX = clientX; startY = clientY;
+        isDragging = true; dragMoved = false;
         activePointerId = (pointerId !== undefined) ? pointerId : null;
-
         document.body.classList.add('dragging-warn');
         btn.style.zIndex = '9999';
         lockScroll();
-
         if (pointerId !== undefined) {
             try { btn.setPointerCapture(pointerId); } catch (err) {}
         }
-
         document.addEventListener('pointermove', onMove, true);
         document.addEventListener('pointerup', onEnd, true);
         document.addEventListener('pointercancel', onEnd, true);
@@ -367,7 +423,6 @@ window.addEventListener('message', function (e) {
         document.addEventListener('touchmove', onMove, { passive: false, capture: true });
         document.addEventListener('touchend', onEnd, true);
         document.addEventListener('touchcancel', onEnd, true);
-
         window.addEventListener('pointermove', onMove, true);
         window.addEventListener('pointerup', onEnd, true);
         window.addEventListener('pointercancel', onEnd, true);
@@ -380,17 +435,12 @@ window.addEventListener('message', function (e) {
     btn.addEventListener('pointerdown', function (e) {
         if (e.pointerType === 'mouse' && e.button !== 0) return;
         if (e.isPrimary === false) return;
-        e.preventDefault();
-        e.stopPropagation();
+        e.preventDefault(); e.stopPropagation();
         startDrag(e.clientX, e.clientY, e.pointerId);
     });
 
     btn.addEventListener('click', function (e) {
-        if (dragMoved) {
-            e.preventDefault();
-            e.stopPropagation();
-            return;
-        }
+        if (dragMoved) { e.preventDefault(); e.stopPropagation(); return; }
         toggleWarnPanel();
     });
 
@@ -401,21 +451,14 @@ window.addEventListener('message', function (e) {
 })();
 
 /* =========================================================
-   四、数据与持久化
+   六、数据与持久化
    ========================================================= */
 const DEFAULT_PROJECTS = [
     {
         id: 'default-project',
         name: '默认项目',
         fileTree: [
-            { id: 'root', name: '项目根目录', type: 'folder', children: [
-                { id: 'index.html', name: 'index.html', type: 'file', content:
-'<!DOCTYPE html>\n<html>\n<head>\n  <title>我的页面</title>\n  <link rel="stylesheet" href="style.css">\n</head>\n<body>\n  <h1>Hello, World!</h1>\n  <p>上传图片后会自动命名为 1.png、2.png ...</p>\n  <img src="1.png" alt="我的图片">\n  <script src="app.js"><\/script>\n</body>\n</html>' },
-                { id: 'style.css', name: 'style.css', type: 'file', content:
-'body {\n  margin: 0;\n  padding: 20px;\n  font-family: system-ui, sans-serif;\n  background: #f5f5f5;\n  color: #333;\n  text-align: center;\n}\n\nh1 {\n  color: #0e639c;\n}\n\nimg {\n  max-width: 300px;\n  border-radius: 8px;\n}' },
-                { id: 'app.js', name: 'app.js', type: 'file', content:
-'// 简单的示例脚本\nconst title = document.querySelector("h1");\nif (title) {\n  title.addEventListener("click", () => {\n    alert("你好！");\n  });\n}' }
-            ]}
+            { id: 'root', name: '项目根目录', type: 'folder', children: [] }
         ]
     }
 ];
@@ -437,48 +480,37 @@ function syncCurrentFileContent() {
     }
 }
 
-/* ★ 序列化时剥离 _undoStack / _redoStack，避免存储膨胀 */
 function stringifyProjects() {
     return JSON.stringify(projects, function (key, value) {
-        if (key === '_undoStack' || key === '_redoStack') return undefined;
+        if (key === '_undoStack' || key === '_redoStack' || key === '_blobUrl') return undefined;
+        if (key === 'content' && this && typeof this === 'object' && this.inOpfs === true) {
+            return undefined;
+        }
         return value;
     });
 }
 
-/* ★ 保存：优先 IndexedDB，失败回退 localStorage；成功后闪指示灯 */
 function saveProjects(silent) {
     syncCurrentFileContent();
     const json = stringifyProjects();
-
     idbSet(IDB_KEY, json)
         .then(flashSaveIndicator)
         .catch(function (err) {
-            console.warn('IndexedDB 保存失败，回退 localStorage：', err);
-            try {
-                localStorage.setItem(STORAGE_KEY, json);
-            } catch (e) {
-                if (!silent && !storageWarned) {
-                    storageWarned = true;
-                    alert('保存失败：' + e.message);
-                }
-            }
+            console.warn('IndexedDB 保存失败：', err);
+            try { localStorage.setItem(STORAGE_KEY, json); } catch (e) {}
         });
     return true;
 }
 
-/* ★ 读取：优先 IndexedDB → 备份 → 旧 localStorage，并清洗残留字段 */
 async function loadProjects() {
     let data = null;
-
     try {
         const raw = await idbGet(IDB_KEY);
         if (raw) {
             const parsed = JSON.parse(raw);
             if (Array.isArray(parsed) && parsed.length > 0) data = parsed;
         }
-    } catch (e) {
-        console.warn('IndexedDB 读取失败：', e);
-    }
+    } catch (e) { console.warn('IDB 读取失败：', e); }
 
     if (!data) {
         try {
@@ -487,9 +519,7 @@ async function loadProjects() {
                 const parsed = JSON.parse(raw);
                 if (Array.isArray(parsed) && parsed.length > 0) data = parsed;
             }
-        } catch (e) {
-            console.warn('备份读取失败：', e);
-        }
+        } catch (e) {}
     }
 
     if (!data) {
@@ -503,9 +533,7 @@ async function loadProjects() {
                     try { localStorage.removeItem(STORAGE_KEY); } catch (e) {}
                 }
             }
-        } catch (e) {
-            console.warn('localStorage 读取失败：', e);
-        }
+        } catch (e) {}
     }
 
     if (data) {
@@ -520,7 +548,6 @@ async function loadProjects() {
             })(proj.fileTree);
         });
     }
-
     return data;
 }
 
@@ -540,53 +567,139 @@ function setCurrentFileTree(tree) {
 }
 
 /* =========================================================
-   五、编辑器渲染（高亮 + 行号）
+   七、编辑器 DOM 引用
    ========================================================= */
 const codeEditorEl = document.getElementById('codeEditor');
 const highlightLayerEl = document.getElementById('highlightLayer');
 const gutterEl = document.getElementById('gutter');
 const editorRootEl = document.getElementById('editor');
 
-function isImageMode() {
-    return editorRootEl.classList.contains('image-mode');
+/* =========================================================
+   八、字号缩放
+   ========================================================= */
+function loadFontSize() {
+    let s = FONT_DEFAULT;
+    try {
+        const v = parseInt(localStorage.getItem(FONT_KEY), 10);
+        if (!isNaN(v) && v >= FONT_MIN && v <= FONT_MAX) s = v;
+    } catch (e) {}
+    return s;
 }
 
-function isAudioMode() {
-    return editorRootEl.classList.contains('audio-mode');
+function applyFontSize(size) {
+    size = Math.max(FONT_MIN, Math.min(FONT_MAX, Math.round(size)));
+    if (size === editorFontSize) return;
+    editorFontSize = size;
+    const lineHeight = Math.round(size * 1.45);
+    const root = document.documentElement;
+    root.style.setProperty('--editor-font-size', size + 'px');
+    root.style.setProperty('--editor-line-height', lineHeight + 'px');
+    try { localStorage.setItem(FONT_KEY, String(size)); } catch (e) {}
+    updateHighlight();
+    showToast('字号 ' + size + 'px');
+}
+
+function initFontSize() {
+    editorFontSize = loadFontSize();
+    const lineHeight = Math.round(editorFontSize * 1.45);
+    const root = document.documentElement;
+    root.style.setProperty('--editor-font-size', editorFontSize + 'px');
+    root.style.setProperty('--editor-line-height', lineHeight + 'px');
+}
+
+codeEditorEl.addEventListener('wheel', function (e) {
+    if (!e.ctrlKey && !e.metaKey) return;
+    e.preventDefault();
+    if (e.deltaY < 0) applyFontSize(editorFontSize + 1);
+    else applyFontSize(editorFontSize - 1);
+}, { passive: false });
+
+(function initPinchZoom() {
+    let pinchActive = false, startDist = 0, startSize = FONT_DEFAULT;
+    function distance(t1, t2) {
+        const dx = t1.clientX - t2.clientX, dy = t1.clientY - t2.clientY;
+        return Math.sqrt(dx * dx + dy * dy);
+    }
+    codeEditorEl.addEventListener('touchstart', function (e) {
+        if (e.touches.length === 2) {
+            pinchActive = true;
+            startDist = distance(e.touches[0], e.touches[1]);
+            startSize = editorFontSize;
+        }
+    }, { passive: true });
+    codeEditorEl.addEventListener('touchmove', function (e) {
+        if (!pinchActive || e.touches.length !== 2) return;
+        e.preventDefault();
+        const dist = distance(e.touches[0], e.touches[1]);
+        if (startDist < 10) return;
+        applyFontSize(startSize * (dist / startDist));
+    }, { passive: false });
+    codeEditorEl.addEventListener('touchend', function (e) {
+        if (e.touches.length < 2) pinchActive = false;
+    });
+    codeEditorEl.addEventListener('touchcancel', function () { pinchActive = false; });
+})();
+
+/* =========================================================
+   九、编辑器渲染
+   ========================================================= */
+function isImageMode() { return editorRootEl.classList.contains('image-mode'); }
+function isAudioMode() { return editorRootEl.classList.contains('audio-mode'); }
+
+let _lastLineCount = -1;
+function buildLineNumbers(lineCount) {
+    if (lineCount === _lastLineCount) return;
+    _lastLineCount = lineCount;
+    if (lineCount <= 0) { gutterEl.textContent = ''; return; }
+    const arr = new Array(lineCount);
+    for (let k = 0; k < lineCount; k++) arr[k] = k + 1;
+    gutterEl.textContent = arr.join('\n');
 }
 
 function updateHighlight() {
     if (isImageMode() || isAudioMode()) {
         highlightLayerEl.textContent = '';
         gutterEl.textContent = '';
+        _lastLineCount = -1;
         return;
     }
-
     const code = codeEditorEl.value;
-    const file = currentFileId ? findFileById(currentFileId) : null;
-    const lang = file ? getLangFromName(file.name) : 'plain';
-
-    if (code.length > 200000) {
+    const len = code.length;
+    if (len > LINE_NUMBER_LIMIT) {
+        highlightLayerEl.textContent = code;
+        gutterEl.textContent = '';
+        _lastLineCount = -1;
+        syncScroll();
+        return;
+    }
+    if (len > HIGHLIGHT_LIMIT) {
         highlightLayerEl.textContent = code;
     } else {
+        const file = currentFileId ? findFileById(currentFileId) : null;
+        const lang = file ? getLangFromName(file.name) : 'plain';
         highlightLayerEl.innerHTML = highlight(code, lang);
     }
-
-    const lineCount = code.split('\n').length;
-    let g = '';
-    for (let k = 1; k <= lineCount; k++) g += k + '\n';
-    gutterEl.textContent = g;
-
-    syncScroll();
+    requestAnimationFrame(function () {
+        const cs = window.getComputedStyle(codeEditorEl);
+        const lineHeight = parseFloat(cs.lineHeight) || 22;
+        const paddingTop = parseFloat(cs.paddingTop) || 12;
+        const contentH = highlightLayerEl.scrollHeight - paddingTop * 2;
+        const lineCount = Math.max(1, Math.round(contentH / lineHeight));
+        buildLineNumbers(lineCount);
+        syncScroll();
+    });
 }
 
+let _highlightTimer = null;
 function requestHighlight() {
     if (highlightPending) return;
     highlightPending = true;
-    requestAnimationFrame(function () {
-        highlightPending = false;
-        updateHighlight();
-    });
+    requestAnimationFrame(function () { highlightPending = false; updateHighlight(); });
+}
+
+function requestHighlightSlow() {
+    clearTimeout(_highlightTimer);
+    _highlightTimer = setTimeout(updateHighlight, PASTE_HIGHLIGHT_DELAY);
 }
 
 function syncScroll() {
@@ -596,9 +709,19 @@ function syncScroll() {
 }
 
 codeEditorEl.addEventListener('scroll', syncScroll);
+codeEditorEl.addEventListener('keyup', syncScroll);
+codeEditorEl.addEventListener('click', syncScroll);
+codeEditorEl.addEventListener('focus', syncScroll);
+document.addEventListener('selectionchange', function () {
+    if (document.activeElement === codeEditorEl) syncScroll();
+});
+codeEditorEl.addEventListener('compositionupdate', syncScroll);
+codeEditorEl.addEventListener('compositionend', function () {
+    requestAnimationFrame(syncScroll);
+});
 
 /* =========================================================
-   六、撤销 / 重做
+   十、撤销 / 重做
    ========================================================= */
 let snapshotTimer = null;
 
@@ -634,28 +757,16 @@ function undo() {
     if (!currentFileId) return;
     const file = findFileById(currentFileId);
     if (!file || file.editable === false) return;
-
     clearTimeout(snapshotTimer);
     ensureHistory(file);
-
     const stack = file._undoStack;
     const current = codeEditorEl.value;
-
     if (stack[stack.length - 1] !== current) {
-        stack.push(current);
-        file._redoStack = [];
+        stack.push(current); file._redoStack = [];
     }
-
-    if (stack.length <= 1) {
-        showToast('没有可撤销的操作');
-        updateUndoRedoButtons();
-        return;
-    }
-
-    const cur = stack.pop();
-    file._redoStack.push(cur);
+    if (stack.length <= 1) { showToast('没有可撤销的操作'); updateUndoRedoButtons(); return; }
+    const cur = stack.pop(); file._redoStack.push(cur);
     const prev = stack[stack.length - 1];
-
     codeEditorEl.value = prev;
     file.content = prev;
     updateHighlight();
@@ -668,19 +779,13 @@ function redo() {
     if (!currentFileId) return;
     const file = findFileById(currentFileId);
     if (!file || file.editable === false) return;
-
     clearTimeout(snapshotTimer);
     ensureHistory(file);
-
     if (!file._redoStack || file._redoStack.length === 0) {
-        showToast('没有可重做的操作');
-        updateUndoRedoButtons();
-        return;
+        showToast('没有可重做的操作'); updateUndoRedoButtons(); return;
     }
-
     const next = file._redoStack.pop();
     file._undoStack.push(next);
-
     codeEditorEl.value = next;
     file.content = next;
     updateHighlight();
@@ -693,7 +798,6 @@ function updateUndoRedoButtons() {
     const btnUndo = document.getElementById('btnUndo');
     const btnRedo = document.getElementById('btnRedo');
     if (!btnUndo || !btnRedo) return;
-
     let canUndo = false, canRedo = false;
     if (currentFileId) {
         const file = findFileById(currentFileId);
@@ -701,8 +805,7 @@ function updateUndoRedoButtons() {
             const stack = file._undoStack || [];
             const redoStack = file._redoStack || [];
             const cur = codeEditorEl.value;
-            canUndo = stack.length > 1 ||
-                      (stack.length > 0 && stack[stack.length - 1] !== cur);
+            canUndo = stack.length > 1 || (stack.length > 0 && stack[stack.length - 1] !== cur);
             canRedo = redoStack.length > 0;
         }
     }
@@ -710,14 +813,15 @@ function updateUndoRedoButtons() {
     btnRedo.disabled = !canRedo;
 }
 
-codeEditorEl.addEventListener('input', function () {
+codeEditorEl.addEventListener('input', function (e) {
     if (currentFileId) {
         const file = findFileById(currentFileId);
-        if (file && file.editable !== false) {
-            file.content = this.value;
-        }
+        if (file && file.editable !== false) file.content = this.value;
     }
-    requestHighlight();
+    const isPaste = e && typeof e.inputType === 'string' &&
+                    e.inputType.indexOf('insertFromPaste') === 0;
+    if (isPaste || this.value.length > HIGHLIGHT_LIMIT) requestHighlightSlow();
+    else requestHighlight();
     scheduleSnapshot();
     updateUndoRedoButtons();
     scheduleSave();
@@ -729,12 +833,9 @@ codeEditorEl.addEventListener('keydown', function (e) {
         if (k === 'z' && !e.shiftKey) { e.preventDefault(); undo(); return; }
         if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); redo(); return; }
     }
-
     if (e.key === 'Tab') {
         e.preventDefault();
-        const start = this.selectionStart;
-        const end = this.selectionEnd;
-        const val = this.value;
+        const start = this.selectionStart, end = this.selectionEnd, val = this.value;
         this.value = val.slice(0, start) + '    ' + val.slice(end);
         this.selectionStart = this.selectionEnd = start + 4;
         if (currentFileId) {
@@ -747,10 +848,8 @@ codeEditorEl.addEventListener('keydown', function (e) {
         scheduleSave();
         return;
     }
-
     if (e.key === 'Enter') {
-        const start = this.selectionStart;
-        const val = this.value;
+        const start = this.selectionStart, val = this.value;
         const lineStart = val.lastIndexOf('\n', start - 1) + 1;
         const lineText = val.slice(lineStart, start);
         const indentMatch = lineText.match(/^[ \t]*/);
@@ -776,7 +875,7 @@ codeEditorEl.addEventListener('keydown', function (e) {
 });
 
 /* =========================================================
-   七、搜索
+   十一、搜索
    ========================================================= */
 let searchStatusTimer = null;
 
@@ -813,14 +912,13 @@ function getCharWidth() {
 function scrollEditorToSelection() {
     const text = codeEditorEl.value;
     const pos = codeEditorEl.selectionStart;
-
     const before = text.substring(0, pos);
     const lineIndex = before.split('\n').length - 1;
     const lastNL = before.lastIndexOf('\n');
     const col = pos - (lastNL + 1);
 
     const cs = window.getComputedStyle(codeEditorEl);
-    const lineHeight = parseFloat(cs.lineHeight) || 22.4;
+    const lineHeight = parseFloat(cs.lineHeight) || 22;
     const paddingTop = parseFloat(cs.paddingTop) || 12;
     const paddingLeft = parseFloat(cs.paddingLeft) || 12;
 
@@ -832,14 +930,12 @@ function scrollEditorToSelection() {
     const matchX = paddingLeft + col * charWidth;
     const targetLeft = matchX - codeEditorEl.clientWidth / 2;
     codeEditorEl.scrollLeft = Math.max(0, targetLeft);
-
     syncScroll();
 }
 
 function doSearch() {
     if (isImageMode() || isAudioMode() || codeEditorEl.disabled) {
-        showSearchStatus('当前文件不支持搜索', true);
-        return;
+        showSearchStatus('当前文件不支持搜索', true); return;
     }
     const inputEl = document.getElementById('searchInput');
     const term = inputEl.value;
@@ -852,12 +948,10 @@ function doSearch() {
 
     let from = (selectedText === term) ? selEnd : selStart;
     let idx = text.indexOf(term, from);
-
     if (idx === -1 && from > 0) {
         idx = text.indexOf(term, 0);
         if (idx === selStart && selectedText === term) {
-            showSearchStatus('没有更多匹配了', true);
-            return;
+            showSearchStatus('没有更多匹配了', true); return;
         }
     }
     if (idx === -1) { showSearchStatus('没有找到「' + term + '」', true); return; }
@@ -869,10 +963,11 @@ function doSearch() {
 }
 
 /* =========================================================
-   八、文件树与项目
+   十二、文件树与项目
    ========================================================= */
 async function init() {
     initTheme();
+    initFontSize();
     const saved = await loadProjects();
     if (saved) projects = saved;
     else { projects = JSON.parse(JSON.stringify(DEFAULT_PROJECTS)); saveProjects(true); }
@@ -926,12 +1021,10 @@ function renderProjectList() {
 function renameProject(id) {
     const proj = projects.find(p => p.id === id);
     if (!proj) return;
-
     const newName = prompt('重命名项目：', proj.name);
     if (newName === null) return;
     const trimmed = newName.trim();
     if (!trimmed || trimmed === proj.name) return;
-
     proj.name = trimmed;
     renderProjectList();
     saveProjects(true);
@@ -941,7 +1034,6 @@ function renameProject(id) {
 function deleteProject(id) {
     const proj = projects.find(p => p.id === id);
     if (!proj) return;
-
     if (!confirm('确定删除项目「' + proj.name + '」吗？\n该项目下的所有文件都会被删除，操作不可撤销。')) return;
 
     if (currentProjectId === id) {
@@ -955,13 +1047,14 @@ function deleteProject(id) {
         isTreeCollapsed = true;
         document.getElementById('sidebar').classList.add('collapsed');
         document.getElementById('fileTree').innerHTML = '';
-
-        /* ★ 恢复下载和设置按钮 */
         const themeBtn = document.getElementById('themeBtn');
         if (themeBtn) themeBtn.style.display = 'flex';
+        /* ★ 恢复下载按钮 */
         const dlBtn = document.getElementById('downloadBtn');
-        if (dlBtn) dlBtn.style.display = 'inline-flex';
+        if (dlBtn) dlBtn.style.display = '';
     }
+
+    opfsDeleteProject(id);
 
     projects = projects.filter(p => p.id !== id);
     renderProjectList();
@@ -1015,9 +1108,9 @@ function enterProject(projectId) {
     document.getElementById('btnStop').style.display = 'none';
     document.getElementById('zipWrapper').style.display = 'inline-block';
 
-    /* ★ 进入项目隐藏设置按钮和下载按钮 */
     const themeBtn = document.getElementById('themeBtn');
     if (themeBtn) themeBtn.style.display = 'none';
+    /* ★ 隐藏下载按钮 */
     const dlBtn = document.getElementById('downloadBtn');
     if (dlBtn) dlBtn.style.display = 'none';
     closeThemeMenu();
@@ -1031,7 +1124,7 @@ function enterProject(projectId) {
 
     renderFileTree();
 
-    const firstFile = findFileById('index.html') || findFirstFile(getCurrentFileTree());
+    const firstFile = findFirstFile(getCurrentFileTree());
     if (firstFile) selectFile(firstFile.id);
     else updateUndoRedoButtons();
 }
@@ -1051,13 +1144,11 @@ function backToProjectList() {
     isTreeCollapsed = true;
     document.getElementById('sidebar').classList.add('collapsed');
     document.getElementById('fileTree').innerHTML = '';
-
-    /* ★ 回到主界面显示设置按钮和下载按钮 */
     const themeBtn = document.getElementById('themeBtn');
     if (themeBtn) themeBtn.style.display = 'flex';
+    /* ★ 恢复下载按钮 */
     const dlBtn = document.getElementById('downloadBtn');
-    if (dlBtn) dlBtn.style.display = 'inline-flex';
-
+    if (dlBtn) dlBtn.style.display = '';
     renderProjectList();
 }
 
@@ -1100,13 +1191,23 @@ function findParent(id, nodes, parent) {
     return null;
 }
 
+/* =========================================================
+   文件树渲染（带上限）
+   ========================================================= */
 function renderFileTree() {
     const treeEl = document.getElementById('fileTree');
     treeEl.innerHTML = '';
     const nodes = getCurrentFileTree();
 
+    let renderedCount = 0;
+    let totalCount = 0;
+
     function renderNodes(nodes, container) {
-        for (const node of nodes) {
+        for (let i = 0; i < nodes.length; i++) {
+            const node = nodes[i];
+            totalCount++;
+            if (renderedCount >= TREE_MAX_RENDER) continue;
+
             if (node.type === 'folder') {
                 const isExpanded = expandedFolderId === node.id;
                 const folderEl = document.createElement('div');
@@ -1151,14 +1252,29 @@ function renderFileTree() {
                 `;
                 container.appendChild(fileEl);
             }
+            renderedCount++;
         }
     }
     renderNodes(nodes, treeEl);
+
+    if (totalCount > TREE_MAX_RENDER) {
+        const hint = document.createElement('div');
+        hint.style.cssText = 'padding:14px;color:#888;font-size:12px;text-align:center;line-height:1.6;';
+        hint.textContent = '共 ' + totalCount + ' 项，仅显示前 ' + TREE_MAX_RENDER + ' 项';
+        treeEl.appendChild(hint);
+    }
 }
 
 function toggleFolder(id) {
     expandedFolderId = (expandedFolderId === id) ? null : id;
     renderFileTree();
+}
+
+function toggleFileTree() {
+    isTreeCollapsed = !isTreeCollapsed;
+    const sidebar = document.getElementById('sidebar');
+    if (isTreeCollapsed) sidebar.classList.add('collapsed');
+    else sidebar.classList.remove('collapsed');
 }
 
 function getFileInfoText(file) {
@@ -1172,13 +1288,9 @@ function getFileInfoText(file) {
     text += '类型：' + (file.mime || '未知') + '\n';
     text += '大小：' + (file.size ? formatSize(file.size) : '未知') + '\n\n';
     if (isImage) {
-        text += '✅ 这个图片已经保存在项目中\n';
-        text += '在 HTML 里这样引用它：\n\n';
-        text += '  <img src="' + file.name + '" alt="">\n';
+        text += '✅ 这个图片已经保存在项目中\n在 HTML 里这样引用它：\n\n  <img src="' + file.name + '" alt="">\n';
     } else if (isAudio) {
-        text += '✅ 这个音频已经保存在项目中\n';
-        text += '在 HTML 里这样引用它：\n\n';
-        text += '  <audio src="' + file.name + '" controls></audio>\n';
+        text += '✅ 这个音频已经保存在项目中\n在 HTML 里这样引用它：\n\n  <audio src="' + file.name + '" controls></audio>\n';
     } else {
         text += '这是二进制文件，已保存到项目中，可以在 HTML 里通过文件名引用。';
     }
@@ -1193,7 +1305,7 @@ function stopAudioViewer() {
     try { audioPlayer.load(); } catch (e) {}
 }
 
-function selectFile(id) {
+async function selectFile(id) {
     const file = findFileById(id);
     if (!file || file.type === 'folder') return;
 
@@ -1206,6 +1318,12 @@ function selectFile(id) {
     }
 
     currentFileId = id;
+
+    if (file.inOpfs && file.editable !== false && !file.content) {
+        const text = await loadFileContent(currentProjectId, file.id);
+        file.content = text || '';
+    }
+
     ensureHistory(file);
 
     const imageViewer = document.getElementById('imageViewer');
@@ -1216,15 +1334,16 @@ function selectFile(id) {
     const audioViewerMeta = document.getElementById('audioViewerMeta');
     const audioPlayer = document.getElementById('audioViewerPlayer');
 
-    const isImage = file.isImage && file.content && file.content.startsWith('data:image/');
-    const isAudio = file.isAudio && file.content && file.content.startsWith('data:audio/');
+    const isImage = file.isImage;
+    const isAudio = file.isAudio;
 
     imageViewer.classList.remove('active');
     audioViewer.classList.remove('active');
     editorRootEl.classList.remove('image-mode', 'audio-mode');
 
     if (isImage) {
-        imageViewerImg.src = file.content;
+        const url = await ensureBlobUrl(currentProjectId, file.id);
+        imageViewerImg.src = url || '';
         let meta = file.name;
         if (file.size) meta += ' · ' + formatSize(file.size);
         if (file.originalName && file.originalName !== file.name) meta += ' · 原文件名：' + file.originalName;
@@ -1235,6 +1354,7 @@ function selectFile(id) {
         codeEditorEl.disabled = true;
         updateHighlight();
     } else if (isAudio) {
+        const url = await ensureBlobUrl(currentProjectId, file.id);
         audioViewerName.textContent = file.name;
         let meta = '';
         if (file.size) meta += formatSize(file.size);
@@ -1243,7 +1363,7 @@ function selectFile(id) {
             meta += '原文件名：' + file.originalName;
         }
         audioViewerMeta.textContent = meta;
-        audioPlayer.src = file.content;
+        audioPlayer.src = url || '';
         audioViewer.classList.add('active');
         editorRootEl.classList.add('audio-mode');
         codeEditorEl.value = '';
@@ -1302,13 +1422,6 @@ function renameItem(id) {
     if (!newName || newName === item.name) return;
 
     item.name = newName;
-
-    if (item.type === 'file') {
-        const newId = genId('file');
-        const oldId = item.id;
-        item.id = newId;
-        if (currentFileId === oldId) currentFileId = newId;
-    }
     renderFileTree();
     document.getElementById('currentFileName').textContent = item.name;
     updateHighlight();
@@ -1317,6 +1430,17 @@ function renameItem(id) {
 
 function deleteItem(id) {
     if (!confirm('确定删除吗？')) return;
+
+    const item = findFileById(id);
+
+    (function removeOpfsContents(node) {
+        if (!node) return;
+        if (node.type === 'file' && node.inOpfs) {
+            opfsDelete(currentProjectId, node.id);
+            revokeBlobUrl(node.id);
+        }
+        if (node.children) node.children.forEach(removeOpfsContents);
+    })(item);
 
     const parent = findParent(id);
     if (parent && parent.children) parent.children = parent.children.filter(c => c.id !== id);
@@ -1341,7 +1465,7 @@ function deleteItem(id) {
 }
 
 /* =========================================================
-   九、上传文件
+   十三、上传文件（OPFS 版）
    ========================================================= */
 function getUploadTargetFolder() {
     if (expandedFolderId) {
@@ -1382,7 +1506,6 @@ function isImageFile(file) {
     return ['png','jpg','jpeg','gif','webp','bmp','ico','svg','avif'].includes(ext);
 }
 
-/* ★ 补全音频格式 */
 function isAudioFile(file) {
     if ((file.type || '').startsWith('audio/')) return true;
     const ext = (file.name.split('.').pop() || '').toLowerCase();
@@ -1392,90 +1515,157 @@ function isAudioFile(file) {
     ].includes(ext);
 }
 
-function getNextFileName(ext) {
-    if (!ext) ext = 'bin';
-    const used = new Set();
-    const escExt = ext.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const re = new RegExp('^(\\d+)\\.' + escExt + '$', 'i');
-    (function walk(nodes) {
-        for (const node of nodes) {
-            if (node.type === 'file') {
-                const m = node.name.match(re);
-                if (m) used.add(parseInt(m[1], 10));
-            }
-            if (node.children) walk(node.children);
-        }
-    })(getCurrentFileTree());
-    let n = 1;
-    while (used.has(n)) n++;
-    return n + '.' + ext;
+function showUploadProgress(pct, label) {
+    const el = document.getElementById('uploadProgress');
+    const fill = document.getElementById('uploadProgressFill');
+    const text = document.getElementById('uploadProgressText');
+    if (!el || !fill || !text) return;
+    el.classList.add('show');
+    fill.style.width = pct + '%';
+    text.textContent = label || ('上传中 ' + pct + '%');
 }
 
-/* ★ 上传：只保留最后一个 id，不累积大文件引用 */
+function hideUploadProgress() {
+    const el = document.getElementById('uploadProgress');
+    if (!el) return;
+    setTimeout(function () { el.classList.remove('show'); }, 260);
+}
+
 function uploadFile(input) {
     const files = Array.from(input.files || []);
     if (files.length === 0) return;
     input.value = '';
 
-    const targetFolder = getUploadTargetFolder();
-    let index = 0;
-    let lastAddedId = null;
-
-    function processNext() {
-        if (index >= files.length) {
-            renderFileTree();
-            if (lastAddedId) selectFile(lastAddedId);
-            saveProjects();
-            return;
-        }
-        const file = files[index++];
-        const reader = new FileReader();
-        const text = isTextFile(file);
-        const image = isImageFile(file);
-        const audio = isAudioFile(file);
-
-        reader.onload = function (e) {
-            const id = genId('upload');
-            const content = e.target.result;
-
-            const ext = (file.name.split('.').pop() || 'txt').toLowerCase();
-            const finalName = getNextFileName(ext);
-
-            const newFileObj = {
-                id: id,
-                name: finalName,
-                originalName: file.name,
-                type: 'file',
-                content: content,
-                mime: file.type || '',
-                size: file.size,
-                uploaded: true,
-                isImage: image,
-                isAudio: audio,
-                editable: text
-            };
-            if (targetFolder) targetFolder.children.push(newFileObj);
-            else { const tree = getCurrentFileTree(); tree.push(newFileObj); setCurrentFileTree(tree); }
-
-            lastAddedId = id;
-            processNext();
-        };
-        reader.onerror = function () { console.warn('读取失败：', file.name); processNext(); };
-        if (text) reader.readAsText(file);
-        else reader.readAsDataURL(file);
+    if (!OPFS_SUPPORTED) {
+        alert('当前浏览器不支持 OPFS（Origin Private File System），请用最新版 Chrome / Edge / Firefox / Safari。');
+        return;
     }
-    processNext();
-}
 
-function toggleFileTree() {
-    isTreeCollapsed = !isTreeCollapsed;
-    const sidebar = document.getElementById('sidebar');
-    if (isTreeCollapsed) sidebar.classList.add('collapsed');
-    else sidebar.classList.remove('collapsed');
+    const projectId = currentProjectId;
+    const targetFolder = getUploadTargetFolder();
+    const listEl = targetFolder ? targetFolder.children : getCurrentFileTree();
+    const total = files.length;
+    let completed = 0;
+    let lastAddedId = null;
+    let lastProgressAt = 0;
+
+    const usedByExt = new Map();
+    function ensureUsedSet(ext) {
+        let s = usedByExt.get(ext);
+        if (!s) { s = new Set(); usedByExt.set(ext, s); }
+        return s;
+    }
+    (function collect(nodes) {
+        if (!nodes) return;
+        for (let i = 0; i < nodes.length; i++) {
+            const node = nodes[i];
+            if (node.type === 'file') {
+                const dot = node.name.lastIndexOf('.');
+                if (dot > 0) {
+                    const head = node.name.slice(0, dot);
+                    if (/^\d+$/.test(head)) {
+                        const num = parseInt(head, 10);
+                        const ext = node.name.slice(dot + 1).toLowerCase();
+                        ensureUsedSet(ext).add(num);
+                    }
+                }
+            }
+            if (node.children) collect(node.children);
+        }
+    })(listEl);
+
+    function nextNameFor(rawExt) {
+        const ext = (rawExt || 'bin').toLowerCase();
+        const used = ensureUsedSet(ext);
+        let n = 1;
+        while (used.has(n)) n++;
+        used.add(n);
+        return n + '.' + ext;
+    }
+
+    function processOne(file, done) {
+        const id = genId('upload');
+        const isText = isTextFile(file);
+        const isImg = isImageFile(file);
+        const isAud = isAudioFile(file);
+        const ext = (file.name.split('.').pop() || 'txt').toLowerCase();
+
+        const newFileObj = {
+            id: id,
+            name: nextNameFor(ext),
+            originalName: file.name,
+            type: 'file',
+            mime: file.type || '',
+            size: file.size,
+            uploaded: true,
+            isImage: isImg,
+            isAudio: isAud,
+            editable: isText,
+            inOpfs: true
+        };
+
+        opfsWrite(projectId, id, file).then(function () {
+            if (isText) {
+                file.text().then(function (text) {
+                    _fileContentCache[id] = text;
+                    listEl.push(newFileObj);
+                    lastAddedId = id;
+                    completed++;
+                    done();
+                }).catch(function () {
+                    listEl.push(newFileObj);
+                    lastAddedId = id;
+                    completed++;
+                    done();
+                });
+            } else {
+                listEl.push(newFileObj);
+                lastAddedId = id;
+                completed++;
+                done();
+            }
+        }).catch(function (err) {
+            console.warn('OPFS 写失败：', file.name, err);
+            completed++;
+            done();
+        });
+    }
+
+    let nextIndex = 0;
+    let inFlight = 0;
+
+    showUploadProgress(0, '准备上传 0/' + total);
+
+    function pump() {
+        while (inFlight < UPLOAD_CONCURRENCY && nextIndex < total) {
+            const file = files[nextIndex++];
+            inFlight++;
+            processOne(file, function () {
+                inFlight--;
+                const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+                if (now - lastProgressAt > 100 || completed === total) {
+                    lastProgressAt = now;
+                    const pct = Math.round(completed / total * 100);
+                    showUploadProgress(pct, '上传中 ' + completed + '/' + total);
+                }
+                pump();
+            });
+        }
+
+        if (nextIndex >= total && inFlight === 0) {
+            showUploadProgress(100, '已完成 ' + total + '/' + total);
+            hideUploadProgress();
+            renderFileTree();
+            if (lastAddedId && total <= 50) selectFile(lastAddedId);
+            scheduleSave();
+        }
+    }
+
+    pump();
 }
 
 /* =========================================================
-   十、运行预览 + 错误捕获
+   十四、运行预览 + 错误捕获
    ========================================================= */
 function isExternalUrl(url) {
     if (!url) return true;
@@ -1503,14 +1693,7 @@ function buildFileMap() {
     return map;
 }
 
-function extractDataUrl(content) {
-    if (!content) return null;
-    if (/^data:[^,]+,/.test(content)) return content;
-    const m = content.match(/src\s*=\s*(['"])(data:[^'"]+)\1/);
-    return m ? m[2] : null;
-}
-
-function resolveLocalRef(url, fileMap) {
+async function resolveLocalRefAsync(url, fileMap) {
     if (!url || isExternalUrl(url)) return null;
     const clean = url.split('?')[0].split('#')[0].replace(/^\.\//, '').replace(/^\//, '');
     if (!clean) return null;
@@ -1523,55 +1706,148 @@ function resolveLocalRef(url, fileMap) {
         addWarnLog('error', '缺失文件：' + clean);
         return null;
     }
-    if (file.uploaded && file.editable === false) {
-        return extractDataUrl(file.content) || file.content;
+    if (file.inOpfs) {
+        if (file.editable !== false) {
+            if (file.content != null) return file.content;
+            const text = await loadFileContent(currentProjectId, file.id);
+            file.content = text || '';
+            return file.content;
+        } else {
+            const u = await ensureBlobUrl(currentProjectId, file.id);
+            return u;
+        }
     }
     return file.content;
 }
 
-function resolveCssUrls(cssContent, fileMap) {
+async function resolveCssUrlsAsync(cssContent, fileMap) {
     if (!cssContent) return cssContent;
-    return cssContent.replace(/url\(\s*(['"]?)([^'")]+)\1\s*\)/g, function (match, quote, url) {
-        const resolved = resolveLocalRef(url, fileMap);
-        return resolved !== null ? 'url("' + resolved + '")' : match;
-    });
+    const re = /url\(\s*(['"]?)([^'")]+)\1\s*\)/g;
+    const matches = [];
+    let m;
+    while ((m = re.exec(cssContent)) !== null) {
+        matches.push({ match: m[0], url: m[2], index: m.index });
+    }
+    if (matches.length === 0) return cssContent;
+
+    const replacements = await Promise.all(matches.map(async function (mm) {
+        const resolved = await resolveLocalRefAsync(mm.url, fileMap);
+        return resolved !== null ? 'url("' + resolved + '")' : null;
+    }));
+
+    let result = '';
+    let lastIndex = 0;
+    for (let i = 0; i < matches.length; i++) {
+        const mm = matches[i];
+        result += cssContent.slice(lastIndex, mm.index);
+        result += replacements[i] != null ? replacements[i] : mm.match;
+        lastIndex = mm.index + mm.match.length;
+    }
+    result += cssContent.slice(lastIndex);
+    return result;
 }
 
-function buildPreviewHtml(htmlContent) {
+async function buildPreviewHtmlAsync(htmlContent) {
     if (!htmlContent) return '<!DOCTYPE html><html><body></body></html>';
     const fileMap = buildFileMap();
     let html = htmlContent;
 
-    html = html.replace(
-        /(<(?:img|source|video|audio|embed|iframe|input)\b[^>]*?)\ssrc\s*=\s*(['"])([^'"]*)\2/gi,
-        function (match, before, quote, url) {
-            const r = resolveLocalRef(url, fileMap);
-            return r !== null ? before + ' src=' + quote + r + quote : match;
-        }
-    );
+    const srcRe = /(<(?:img|source|video|audio|embed|iframe|input)\b[^>]*?)\ssrc\s*=\s*(['"])([^'"]*)\2/gi;
+    const srcMatches = [];
+    let sm;
+    while ((sm = srcRe.exec(html)) !== null) {
+        srcMatches.push({ match: sm[0], before: sm[1], quote: sm[2], url: sm[3], index: sm.index });
+    }
 
-    html = html.replace(/<link\b[^>]*>/gi, function (tag) {
-        if (!/rel\s*=\s*(['"])?stylesheet\1?/i.test(tag)) return tag;
+    const srcReplacements = await Promise.all(srcMatches.map(async function (mm) {
+        const r = await resolveLocalRefAsync(mm.url, fileMap);
+        return r !== null ? mm.before + ' src=' + mm.quote + r + mm.quote : null;
+    }));
+
+    let htmlOut = '';
+    let lastIdx = 0;
+    for (let i = 0; i < srcMatches.length; i++) {
+        const mm = srcMatches[i];
+        htmlOut += html.slice(lastIdx, mm.index);
+        htmlOut += srcReplacements[i] != null ? srcReplacements[i] : mm.match;
+        lastIdx = mm.index + mm.match.length;
+    }
+    htmlOut += html.slice(lastIdx);
+    html = htmlOut;
+
+    const linkRe = /<link\b[^>]*>/gi;
+    const linkMatches = [];
+    let lm;
+    while ((lm = linkRe.exec(html)) !== null) {
+        linkMatches.push({ match: lm[0], index: lm.index });
+    }
+    const linkReplacements = await Promise.all(linkMatches.map(async function (mm) {
+        const tag = mm.match;
+        if (!/rel\s*=\s*(['"])?stylesheet\1?/i.test(tag)) return null;
         const hrefM = tag.match(/href\s*=\s*(['"])([^'"]*)\1/i);
-        if (!hrefM) return tag;
-        const r = resolveLocalRef(hrefM[2], fileMap);
-        return r !== null ? '<style>' + resolveCssUrls(r, fileMap) + '</style>' : tag;
-    });
+        if (!hrefM) return null;
+        const r = await resolveLocalRefAsync(hrefM[2], fileMap);
+        if (r === null) return null;
+        const css = await resolveCssUrlsAsync(r, fileMap);
+        return '<style>' + css + '</style>';
+    }));
 
-    html = html.replace(
-        /<script\b([^>]*?)\ssrc\s*=\s*(['"])([^'"]*)\2([^>]*?)>\s*<\/script>/gi,
-        function (match, before, quote, url, after) {
-            const r = resolveLocalRef(url, fileMap);
-            return r !== null ? '<script' + before + after + '>' + r + '<\/script>' : match;
-        }
-    );
+    htmlOut = '';
+    lastIdx = 0;
+    for (let i = 0; i < linkMatches.length; i++) {
+        const mm = linkMatches[i];
+        htmlOut += html.slice(lastIdx, mm.index);
+        htmlOut += linkReplacements[i] != null ? linkReplacements[i] : mm.match;
+        lastIdx = mm.index + mm.match.length;
+    }
+    htmlOut += html.slice(lastIdx);
+    html = htmlOut;
 
-    html = html.replace(
-        /<style\b([^>]*)>([\s\S]*?)<\/style>/gi,
-        function (match, attrs, content) {
-            return '<style' + attrs + '>' + resolveCssUrls(content, fileMap) + '</style>';
-        }
-    );
+    const scriptRe = /<script\b([^>]*?)\ssrc\s*=\s*(['"])([^'"]*)\2([^>]*?)>\s*<\/script>/gi;
+    const scriptMatches = [];
+    let scm;
+    while ((scm = scriptRe.exec(html)) !== null) {
+        scriptMatches.push({
+            match: scm[0], before: scm[1], quote: scm[2], url: scm[3], after: scm[4], index: scm.index
+        });
+    }
+    const scriptReplacements = await Promise.all(scriptMatches.map(async function (mm) {
+        const r = await resolveLocalRefAsync(mm.url, fileMap);
+        return r !== null ? '<script' + mm.before + mm.after + '>' + r + '<\/script>' : null;
+    }));
+
+    htmlOut = '';
+    lastIdx = 0;
+    for (let i = 0; i < scriptMatches.length; i++) {
+        const mm = scriptMatches[i];
+        htmlOut += html.slice(lastIdx, mm.index);
+        htmlOut += scriptReplacements[i] != null ? scriptReplacements[i] : mm.match;
+        lastIdx = mm.index + mm.match.length;
+    }
+    htmlOut += html.slice(lastIdx);
+    html = htmlOut;
+
+    const styleRe = /<style\b([^>]*)>([\s\S]*?)<\/style>/gi;
+    const styleMatches = [];
+    let stm;
+    while ((stm = styleRe.exec(html)) !== null) {
+        styleMatches.push({ match: stm[0], attrs: stm[1], content: stm[2], index: stm.index });
+    }
+    const styleReplacements = await Promise.all(styleMatches.map(async function (mm) {
+        const css = await resolveCssUrlsAsync(mm.content, fileMap);
+        return '<style' + mm.attrs + '>' + css + '</style>';
+    }));
+
+    htmlOut = '';
+    lastIdx = 0;
+    for (let i = 0; i < styleMatches.length; i++) {
+        const mm = styleMatches[i];
+        htmlOut += html.slice(lastIdx, mm.index);
+        htmlOut += styleReplacements[i] != null ? styleReplacements[i] : mm.match;
+        lastIdx = mm.index + mm.match.length;
+    }
+    htmlOut += html.slice(lastIdx);
+    html = htmlOut;
 
     return html;
 }
@@ -1604,7 +1880,7 @@ function injectErrorScript(html) {
     return script + html;
 }
 
-function runCode() {
+async function runCode() {
     if (!currentFileId) { alert('请先选择或创建一个 HTML 文件'); return; }
     const file = findFileById(currentFileId);
     if (!file) return;
@@ -1612,7 +1888,6 @@ function runCode() {
     if (file.editable !== false) file.content = codeEditorEl.value;
 
     clearWarnLog();
-
     document.getElementById('btnRun').style.display = 'none';
     document.getElementById('btnStop').style.display = 'inline-block';
     document.getElementById('previewArea').classList.add('active');
@@ -1621,14 +1896,17 @@ function runCode() {
     const iframe = document.getElementById('previewFrameFull');
     let html;
 
-    if (file.isImage && file.content && file.content.startsWith('data:image/')) {
-        html = '<!DOCTYPE html><html><body style="margin:0;display:flex;align-items:center;justify-content:center;background:#2d2d2d;min-height:100vh;"><img src="' + file.content + '" style="max-width:100%;max-height:100vh;"></body></html>';
-    } else if (file.isAudio && file.content && file.content.startsWith('data:audio/')) {
-        html = '<!DOCTYPE html><html><body style="margin:0;display:flex;align-items:center;justify-content:center;background:#2d2d2d;min-height:100vh;"><audio src="' + file.content + '" controls autoplay style="width:80%;max-width:440px;"></audio></body></html>';
+    if (file.isImage || file.isAudio) {
+        const url = await ensureBlobUrl(currentProjectId, file.id);
+        if (file.isImage) {
+            html = '<!DOCTYPE html><html><body style="margin:0;display:flex;align-items:center;justify-content:center;background:#2d2d2d;min-height:100vh;"><img src="' + url + '" style="max-width:100%;max-height:100vh;"></body></html>';
+        } else {
+            html = '<!DOCTYPE html><html><body style="margin:0;display:flex;align-items:center;justify-content:center;background:#2d2d2d;min-height:100vh;"><audio src="' + url + '" controls autoplay style="width:80%;max-width:440px;"></audio></body></html>';
+        }
     } else if (!file.name.endsWith('.html') && !file.name.endsWith('.htm')) {
         html = '<!DOCTYPE html><html><body style="margin:0;"><pre style="padding:20px;background:#f5f5f5;white-space:pre-wrap;word-break:break-all;font-family:monospace;">' + escapeHtml(file.content || '') + '</pre></body></html>';
     } else {
-        html = buildPreviewHtml(file.content || '');
+        html = await buildPreviewHtmlAsync(file.content || '');
     }
 
     iframe.srcdoc = injectErrorScript(html);
@@ -1650,7 +1928,7 @@ document.addEventListener('keydown', function (e) {
 });
 
 /* =========================================================
-   十一、新建项目
+   十五、新建项目
    ========================================================= */
 function showNewProjectModal() {
     document.getElementById('projectModal').style.display = 'flex';
@@ -1671,7 +1949,7 @@ function confirmNewProject() {
         name: name,
         fileTree: [
             { id: 'root', name: name + ' 根目录', type: 'folder', children: [
-                { id: 'index.html', name: 'index.html', type: 'file', content:
+                { id: genId('file'), name: 'index.html', type: 'file', content:
 `<!DOCTYPE html>
 <html>
 <head>
@@ -1700,7 +1978,6 @@ document.getElementById('projectName').addEventListener('keypress', function (e)
     if (e.key === 'Enter') confirmNewProject();
 });
 
-/* ★ beforeunload：同步 localStorage 兜底 + 异步写 IndexedDB */
 window.addEventListener('beforeunload', function () {
     syncCurrentFileContent();
     const json = stringifyProjects();
@@ -1713,7 +1990,7 @@ document.addEventListener('visibilitychange', function () {
 });
 
 /* =========================================================
-   十二、打包成 ZIP
+   十六、打包成 ZIP
    ========================================================= */
 const _CRC_TABLE = (function () {
     const t = new Uint32Array(256);
@@ -1736,27 +2013,11 @@ function crc32(bytes) {
 }
 
 function textToBytes(str) {
-    if (typeof TextEncoder !== 'undefined') {
-        return new TextEncoder().encode(str);
-    }
+    if (typeof TextEncoder !== 'undefined') return new TextEncoder().encode(str);
     const utf8 = unescape(encodeURIComponent(str));
     const arr = new Uint8Array(utf8.length);
     for (let i = 0; i < utf8.length; i++) arr[i] = utf8.charCodeAt(i);
     return arr;
-}
-
-function dataUrlToBytes(dataUrl) {
-    const idx = dataUrl.indexOf(',');
-    if (idx === -1) return textToBytes(dataUrl);
-    const meta = dataUrl.slice(0, idx);
-    const data = dataUrl.slice(idx + 1);
-    if (meta.indexOf('base64') !== -1) {
-        const bin = atob(data);
-        const arr = new Uint8Array(bin.length);
-        for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
-        return arr;
-    }
-    return textToBytes(decodeURIComponent(data));
 }
 
 function buildZip(files) {
@@ -1850,19 +2111,15 @@ function sanitizeFileName(name) {
     return String(name).replace(/[\\/:*?"<>|]/g, '_').trim() || 'project';
 }
 
-function packProject() {
-    if (!currentProjectId) {
-        alert('请先进入一个项目');
-        return;
-    }
+async function packProject() {
+    if (!currentProjectId) { alert('请先进入一个项目'); return; }
     const proj = projects.find(p => p.id === currentProjectId);
     if (!proj) return;
 
     syncCurrentFileContent();
+    showToast('正在打包...');
 
-    const rootName = sanitizeFileName(proj.name);
-    const files = [];
-
+    const entries = [];
     (function walk(nodes, prefix) {
         for (const node of nodes) {
             if (node.type === 'folder') {
@@ -1870,28 +2127,45 @@ function packProject() {
                 walk(node.children, nextPrefix);
             } else {
                 const path = prefix ? prefix + '/' + node.name : node.name;
-                let bytes;
-
-                if (node.uploaded && node.editable === false) {
-                    const dataUrl = extractDataUrl(node.content) || node.content;
-                    if (dataUrl && dataUrl.indexOf('data:') === 0) {
-                        bytes = dataUrlToBytes(dataUrl);
-                    } else {
-                        bytes = textToBytes(node.content || '');
-                    }
-                } else {
-                    bytes = textToBytes(node.content || '');
-                }
-
-                files.push({ name: rootName + '/' + path, bytes: bytes });
+                entries.push({ node: node, path: path });
             }
         }
     })(proj.fileTree, '');
 
-    if (files.length === 0) {
-        alert('项目里还没有文件，无法打包');
-        return;
+    if (entries.length === 0) { alert('项目里还没有文件，无法打包'); return; }
+
+    const rootName = sanitizeFileName(proj.name);
+    const files = [];
+
+    const CONC = 8;
+    let idx = 0;
+    const tasks = [];
+
+    async function readOne(entry) {
+        let bytes;
+        if (entry.node.inOpfs) {
+            try {
+                const f = await opfsRead(currentProjectId, entry.node.id);
+                const ab = await f.arrayBuffer();
+                bytes = new Uint8Array(ab);
+            } catch (e) {
+                console.warn('读取 OPFS 失败：', entry.path, e);
+                bytes = textToBytes('');
+            }
+        } else {
+            bytes = textToBytes(entry.node.content || '');
+        }
+        files.push({ name: rootName + '/' + entry.path, bytes: bytes });
     }
+
+    async function worker() {
+        while (idx < entries.length) {
+            const cur = entries[idx++];
+            await readOne(cur);
+        }
+    }
+    for (let i = 0; i < CONC; i++) tasks.push(worker());
+    await Promise.all(tasks);
 
     try {
         const zipBytes = buildZip(files);
@@ -1912,9 +2186,8 @@ function packProject() {
 }
 
 /* =========================================================
-   十三、ZIP 菜单 / 导入 ZIP
+   十七、ZIP 菜单 / 导入 ZIP
    ========================================================= */
-
 function toggleZipMenu(e) {
     if (e) e.stopPropagation();
     const menu = document.getElementById('zipMenu');
@@ -1944,15 +2217,6 @@ document.addEventListener('click', function (e) {
     if (!wrapper) return;
     if (!wrapper.contains(e.target)) closeZipMenu();
 });
-
-function bytesToDataUrl(bytes, mime) {
-    let binary = '';
-    const chunk = 8192;
-    for (let i = 0; i < bytes.length; i += chunk) {
-        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
-    }
-    return 'data:' + (mime || 'application/octet-stream') + ';base64,' + btoa(binary);
-}
 
 function guessMime(name) {
     const ext = (name.split('.').pop() || '').toLowerCase();
@@ -1993,7 +2257,7 @@ function isTextByExt(ext) {
 
 async function inflateRaw(bytes) {
     if (typeof DecompressionStream === 'undefined') {
-        throw new Error('当前浏览器不支持 DecompressionStream，无法解压压缩格式的 ZIP');
+        throw new Error('当前浏览器不支持 DecompressionStream，无法解压');
     }
     const ds = new DecompressionStream('deflate-raw');
     const stream = new Blob([bytes]).stream().pipeThrough(ds);
@@ -2010,7 +2274,7 @@ async function parseZip(arrayBuffer) {
     for (let i = bytes.length - 22; i >= minPos; i--) {
         if (dv.getUint32(i, true) === 0x06054b50) { eocdOffset = i; break; }
     }
-    if (eocdOffset === -1) throw new Error('不是有效的 ZIP 文件（找不到 EOCD）');
+    if (eocdOffset === -1) throw new Error('不是有效的 ZIP 文件');
 
     const totalEntries = dv.getUint16(eocdOffset + 10, true);
     const cdOffset = dv.getUint32(eocdOffset + 16, true);
@@ -2024,7 +2288,6 @@ async function parseZip(arrayBuffer) {
         const flags = dv.getUint16(p + 8, true);
         const method = dv.getUint16(p + 10, true);
         const compSize = dv.getUint32(p + 20, true);
-        const uncompSize = dv.getUint32(p + 24, true);
         const nameLen = dv.getUint16(p + 28, true);
         const extraLen = dv.getUint16(p + 30, true);
         const commentLen = dv.getUint16(p + 32, true);
@@ -2042,10 +2305,8 @@ async function parseZip(arrayBuffer) {
             name: name.replace(/\\/g, '/'),
             method: method,
             compSize: compSize,
-            uncompSize: uncompSize,
             localOffset: localOffset
         });
-
         p += 46 + nameLen + extraLen + commentLen;
     }
 
@@ -2063,27 +2324,17 @@ async function parseZip(arrayBuffer) {
         const lhNameLen = dv.getUint16(lhOff + 26, true);
         const lhExtraLen = dv.getUint16(lhOff + 28, true);
         const dataStart = lhOff + 30 + lhNameLen + lhExtraLen;
-
         const compData = bytes.slice(dataStart, dataStart + entry.compSize);
 
         let data;
-        if (entry.method === 0) {
-            data = compData;
-        } else if (entry.method === 8) {
-            try {
-                data = await inflateRaw(compData);
-            } catch (err) {
-                console.warn('解压失败：', entry.name, err);
-                continue;
-            }
-        } else {
-            console.warn('不支持的压缩方法：', entry.method, entry.name);
-            continue;
-        }
+        if (entry.method === 0) data = compData;
+        else if (entry.method === 8) {
+            try { data = await inflateRaw(compData); }
+            catch (err) { console.warn('解压失败：', entry.name, err); continue; }
+        } else continue;
 
         files.push({ name: entry.name, data: data });
     }
-
     return files;
 }
 
@@ -2099,20 +2350,22 @@ function findCommonTopDir(files) {
     return firstPart + '/';
 }
 
-function applyZipEntries(files) {
+async function applyZipEntriesAsync(files) {
     const rootFolder = findFileById('root');
     if (!rootFolder) return 0;
 
     const prefix = findCommonTopDir(files);
-    if (prefix) {
-        for (const f of files) f.name = f.name.slice(prefix.length);
-    }
+    if (prefix) for (const f of files) f.name = f.name.slice(prefix.length);
 
     let count = 0;
+    const projectId = currentProjectId;
 
-    for (const entry of files) {
+    const CONC = 8;
+    let idx = 0;
+
+    async function writeOne(entry) {
         const parts = entry.name.split('/').filter(p => p && p !== '.');
-        if (parts.length === 0) continue;
+        if (parts.length === 0) return;
 
         const fileName = parts[parts.length - 1];
         const folderPath = parts.slice(0, -1);
@@ -2137,37 +2390,60 @@ function applyZipEntries(files) {
         const isImage = mime.startsWith('image/');
         const isAudio = mime.startsWith('audio/');
 
-        let content;
-        if (isText) {
-            content = new TextDecoder('utf-8').decode(entry.data);
-        } else {
-            content = bytesToDataUrl(entry.data, mime || 'application/octet-stream');
+        const id = genId('upload');
+        const blob = new Blob([entry.data], { type: mime || 'application/octet-stream' });
+
+        try {
+            await opfsWrite(projectId, id, blob);
+        } catch (e) {
+            console.warn('OPFS 写失败：', fileName, e);
         }
 
         const newFileObj = {
-            id: genId('upload'),
+            id: id,
             name: fileName,
             originalName: fileName,
             type: 'file',
-            content: content,
             mime: mime || '',
             size: entry.data.length,
             uploaded: true,
             isImage: isImage,
             isAudio: isAudio,
-            editable: isText
+            editable: isText,
+            inOpfs: true
         };
 
-        const idx = current.children.findIndex(c => c.type === 'file' && c.name === fileName);
-        if (idx !== -1) {
-            newFileObj.id = current.children[idx].id;
-            current.children[idx] = newFileObj;
+        if (isText) {
+            try { _fileContentCache[id] = new TextDecoder('utf-8').decode(entry.data); }
+            catch (e) {}
+        }
+
+        const existing = current.children.findIndex(c => c.type === 'file' && c.name === fileName);
+        if (existing !== -1) {
+            const old = current.children[existing];
+            if (old.inOpfs) {
+                opfsDelete(projectId, old.id);
+                revokeBlobUrl(old.id);
+                delete _fileContentCache[old.id];
+            }
+            current.children[existing] = newFileObj;
         } else {
             current.children.push(newFileObj);
         }
 
         count++;
     }
+
+    async function worker() {
+        while (idx < files.length) {
+            const cur = files[idx++];
+            await writeOne(cur);
+        }
+    }
+
+    const tasks = [];
+    for (let i = 0; i < CONC; i++) tasks.push(worker());
+    await Promise.all(tasks);
 
     return count;
 }
@@ -2178,25 +2454,118 @@ async function importZip(input) {
     input.value = '';
 
     if (!currentProjectId) { alert('请先进入一个项目'); return; }
+    if (!OPFS_SUPPORTED) { alert('当前浏览器不支持 OPFS'); return; }
 
     showToast('正在解压 ZIP ...');
 
     try {
         const arrayBuffer = await file.arrayBuffer();
         const entries = await parseZip(arrayBuffer);
-        if (entries.length === 0) { alert('ZIP 文件为空或没有可导入的文件'); return; }
+        if (entries.length === 0) { alert('ZIP 文件为空'); return; }
 
-        const count = applyZipEntries(entries);
+        const count = await applyZipEntriesAsync(entries);
 
         expandedFolderId = 'root';
         renderFileTree();
-        saveProjects(true);
+        scheduleSave();
         showToast('已导入 ' + count + ' 个文件');
     } catch (e) {
         console.error('解压失败：', e);
         alert('解压失败：' + e.message);
     }
 }
+
+/* =========================================================
+   十八、粘贴分块处理 + 进度条
+   ========================================================= */
+function showPasteProgress(pct) {
+    const el = document.getElementById('pasteProgress');
+    const fill = document.getElementById('pasteProgressFill');
+    const text = document.getElementById('pasteProgressText');
+    if (!el || !fill || !text) return;
+    el.classList.add('show');
+    fill.style.width = pct + '%';
+    text.textContent = '粘贴中 ' + pct + '%';
+}
+
+function hidePasteProgress() {
+    const el = document.getElementById('pasteProgress');
+    if (!el) return;
+    setTimeout(function () { el.classList.remove('show'); }, 220);
+}
+
+codeEditorEl.addEventListener('paste', function (e) {
+    const clip = e.clipboardData || window.clipboardData;
+    if (!clip) return;
+    const pasted = clip.getData('text');
+    if (!pasted) return;
+    if (pasted.length < PASTE_MIN_TRIGGER) return;
+
+    e.preventDefault();
+
+    if (currentFileId) {
+        const file = findFileById(currentFileId);
+        if (file && file.editable !== false) {
+            ensureHistory(file);
+            const stack = file._undoStack;
+            const cur = codeEditorEl.value;
+            if (stack[stack.length - 1] !== cur) {
+                stack.push(cur);
+                if (stack.length > 200) stack.shift();
+                file._redoStack = [];
+            }
+        }
+    }
+
+    const startPos = this.selectionStart;
+    const endPos = this.selectionEnd;
+    const before = this.value.slice(0, startPos);
+    const after = this.value.slice(endPos);
+    this.value = before + after;
+
+    const total = pasted.length;
+    let offset = 0;
+    let inserted = '';
+
+    showPasteProgress(0);
+
+    function step() {
+        if (offset >= total) {
+            const finalPos = startPos + total;
+            codeEditorEl.value = before + inserted + after;
+            codeEditorEl.selectionStart = codeEditorEl.selectionEnd = finalPos;
+            if (currentFileId) {
+                const file = findFileById(currentFileId);
+                if (file && file.editable !== false) {
+                    file.content = codeEditorEl.value;
+                    if (file.inOpfs) {
+                        const blob = new Blob([codeEditorEl.value], { type: 'text/plain;charset=utf-8' });
+                        opfsWrite(currentProjectId, file.id, blob).catch(function (e) {
+                            console.warn('OPFS 回写失败：', e);
+                        });
+                        _fileContentCache[file.id] = codeEditorEl.value;
+                    }
+                }
+            }
+            requestHighlightSlow();
+            scheduleSnapshot();
+            updateUndoRedoButtons();
+            scheduleSave();
+            showPasteProgress(100);
+            hidePasteProgress();
+            return;
+        }
+        const chunk = pasted.slice(offset, offset + PASTE_CHUNK_SIZE);
+        inserted += chunk;
+        offset += chunk.length;
+        codeEditorEl.value = before + inserted + after;
+        codeEditorEl.selectionStart = codeEditorEl.selectionEnd = startPos + offset;
+        const pct = Math.min(100, Math.round(offset / total * 100));
+        showPasteProgress(pct);
+        requestAnimationFrame(step);
+    }
+    step();
+});
 
 /* =========================================================
    启动
