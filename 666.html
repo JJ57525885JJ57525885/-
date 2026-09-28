@@ -5,6 +5,15 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <title>Ats编辑</title>
 <style>
+/* ===== 1. 声明字体 ===== */
+@font-face {
+  font-family: 'MyFont';          /* 自定义名字，下面引用它 */
+  src: url('1.woff2') format('woff2');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;              /* 字体加载前先用系统字体显示，避免白屏 */
+}
+
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 body{
   min-height:100vh;
@@ -13,7 +22,8 @@ body{
   align-items:center;
   justify-content:center;
   background:#0f1115;
-  font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+  /* ===== 2. 应用字体 ===== */
+  font-family:'MyFont',-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
   color:#fff;
   user-select:none;
 }
@@ -34,6 +44,8 @@ body{
   cursor:pointer;
   box-shadow:0 8px 24px rgba(99,102,241,.4);
   transition:transform .15s,opacity .15s;
+  /* 按钮也继承字体 */
+  font-family:inherit;
 }
 .btn:active{transform:scale(.96);opacity:.85}
 </style>
@@ -42,14 +54,14 @@ body{
 
 <img src="tb.png" alt="Ats" class="logo">
 <div class="name">Ats编辑</div>
-<div class="ver">版本 1.0</div>
+<div class="ver">版本 1.1</div>
 <button class="btn" id="dl">下载 APK</button>
 
 <script>
 document.getElementById('dl').onclick = function () {
   var a = document.createElement('a');
-  a.href = '代码编辑1.0.apk';
-  a.download = '代码编辑1.0.apk';
+  a.href = '代码编辑.apk';
+  a.download = '代码编辑.apk';
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
