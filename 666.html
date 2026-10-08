@@ -111,6 +111,7 @@ body{
 }
 .sec-t .tag{font-size:11px;padding:1px 8px;border-radius:8px;color:#fff}
 .sec-t.red .tag{background:#ef4444}
+.sec-t.green .tag{background:#22c55e}
 .sec-t.yellow .tag{background:#f59e0b}
 .sec-t.blue .tag{background:#3b82f6}
 .sec ul{list-style:none}
@@ -129,6 +130,7 @@ body{
   background:#5b6478;
 }
 .sec li.fix::before{background:#ef4444}
+.sec li.new::before{background:#22c55e}
 .sec li.opt::before{background:#3b82f6}
 .foot{margin-top:16px;font-size:12px;color:#6b7280;text-align:center}
 </style>
@@ -137,7 +139,7 @@ body{
 
 <img src="tb2.png" alt="Ats" class="logo">
 <div class="name">Ats编辑</div>
-<div class="ver">版本:1.12 作者:Ants</div>
+<div class="ver">版本:1.13 作者:Ants</div>
 
 <button class="btn" id="dl">下载 APK</button>
 <button class="btn ghost" id="up">查看更新内容</button>
@@ -147,43 +149,52 @@ body{
   <div class="sheet" role="dialog" aria-label="更新内容">
     <div class="sheet-head">
       <span class="t">更新内容</span>
-      <span class="v">v1.12</span>
+      <span class="v">v1.13</span>
       <button class="sheet-close" id="closeBtn" title="关闭">✕</button>
     </div>
     <div class="sheet-body">
       <div class="sec">
         <div class="sec-t red"><span class="tag">严重修复</span></div>
         <ul>
-          <li class="fix">修复打开文件时界面崩溃的问题</li>
-          <li class="fix">修复快速切换文件时内容错乱的问题</li>
-          <li class="fix">修复预览页面资源解析失败的问题</li>
-          <li class="fix">修复数据备份机制失效的问题</li>
-          <li class="fix">修复删除项目时的内存泄漏</li>
+          <li class="fix">修复 Windows 等平台滚动条占位导致高亮层与光标、行号错位的问题</li>
+          <li class="fix">修复 ZtFont 异步加载完成后行线与文字基线偏移的问题</li>
+          <li class="fix">修复沙箱 / 隐私模式下退出项目可能被保存异常中断的问题</li>
+          <li class="fix">修复删除字体文件后预览缓存未释放的问题</li>
+        </ul>
+      </div>
+      <div class="sec">
+        <div class="sec-t green"><span class="tag">新增功能</span></div>
+        <ul>
+          <li class="new">新增「文件仓库」：跨项目保存与复用文件，支持上传、重命名、删除与批量导入</li>
+          <li class="new">新增「上传来源选择」：上传时可选择手机文件或仓库文件</li>
+          <li class="new">新增 字体预览器：点击 woff / woff2 / ttf / otf 实时预览字体效果</li>
+          <li class="new">新增 Markdown 预览器：点击 .md 直接渲染，一键切回编辑</li>
+          <li class="new">新增 设置面板：主题与语言集中管理</li>
+          <li class="new">新增 多语言支持：可切换 中文 / English</li>
         </ul>
       </div>
       <div class="sec">
         <div class="sec-t yellow"><span class="tag">功能修复</span></div>
         <ul>
-          <li class="fix">修复缩放字号后搜索定位不准</li>
-          <li class="fix">修复模型查看器加载失败会清空场景</li>
-          <li class="fix">修复日志面板重复绑定事件导致卡顿</li>
-          <li class="fix">修复日志按钮拖拽被重复触发</li>
+          <li class="fix">新建入口合并为「+新建」，弹窗内直接选择文件或文件夹</li>
+          <li class="fix">修复模型查看器加载失败会清空场景的问题</li>
+          <li class="fix">修复日志面板重复绑定事件导致卡顿的问题</li>
+          <li class="fix">修复日志按钮拖拽被重复触发的问题</li>
           <li class="fix">合并 Esc 关闭逻辑，避免重复响应</li>
-          <li class="fix">Base64 打包路径安全处理</li>
           <li class="fix">日志面板异常兜底加固</li>
         </ul>
       </div>
       <div class="sec">
         <div class="sec-t blue"><span class="tag">性能优化</span></div>
         <ul>
-          <li class="opt">大文件粘贴更快，不再卡顿</li>
-          <li class="opt">运行日志渲染更流畅</li>
-          <li class="opt">Base64 工具支持导入更多格式</li>
-          <li class="opt">JSON 高亮更稳定</li>
+          <li class="opt">编辑器行高 1.45 → 1.6，文字更透气、行线更清晰</li>
+          <li class="opt">深色模式下工具 / ZIP 下拉菜单改为深色配色，夜间不刺眼</li>
+          <li class="opt">浅色模式精修：渐变按钮、圆角与层次阴影统一</li>
+          <li class="opt">弹窗与菜单交互统一</li>
         </ul>
       </div>
       <div class="foot">
-  共 16 项更新·感谢使用 Ats编辑💙<br>
+  共 20 项更新·感谢使用 Ats编辑💙<br>
   如果应用端无法下载应用请转至链接<br>
   https://jj57525885jj57525885.
   github.io/-/666.html来下载应用</div>
